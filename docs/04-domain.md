@@ -68,12 +68,36 @@ combination is not. That is what the scoring layer must learn.
 | Type | Onset | Fingerprint | Correct remediation |
 |---|---|---|---|
 | `memory_leak` | slow (long ramp) | `mem_pct` climbs monotonically → `latency_ms` creeps up quadratically → `error_rate` rises late | `restart` |
-| `dependency_failure` | fast | `error_rate` jumps hard, `latency_ms` spikes, **`cpu_pct` flat or *down*** (threads blocked on I/O, not working) | `failover` |
-| `traffic_spike` | fast | `rps` up 3–6×, `cpu_pct` up, `latency_ms` up, `error_rate` barely moves | `scale_out` |
+| `dependency_failure` | fast | `error_rate` jumps (0.08–0.60 — upstreams degrade partially more often than they die), `latency_ms` spikes, `rps` dips slightly. **CPU is bimodal:** down when threads block on I/O, *up* when clients retry | `failover` |
+| `traffic_spike` | fast | `rps` up 1.5–6×, `cpu_pct` up, `latency_ms` up, `error_rate` up 0.02–0.15 when the service saturates and starts returning 503s | `scale_out` |
 | `bad_deploy` | step | `version` bumps, then `latency_ms` and `error_rate` step up **together**, sustained | `rollback` |
 
-`dependency_failure` having *flat CPU* is the discriminator that separates it from
-`traffic_spike` — both show high latency, only one shows the service actually working.
+### Correction (M2): CPU is *not* the discriminator, and the hard pair isn't the one we named
+
+This doc originally claimed `dependency_failure` shows flat/low CPU and that this is what
+separates it from `traffic_spike`. **Measured, that was wrong**, for two reasons:
+
+- **Retry storms.** When an upstream fails, clients retry, and retries burn CPU. About a
+  third of dependency-failure ticks run CPU *above* baseline, so the distribution is bimodal
+  and its mean (~0.9) describes no actual tick. A test asserting "dep CPU is low" passed on
+  an average that misrepresented a third of the data.
+- **`rps` was doing the work all along.** A traffic spike genuinely has traffic; a failing
+  dependency does not. Boring, and true.
+
+The real hard pair is **`dependency_failure` vs `bad_deploy`** (M2 recall 0.50, 84/184
+misread). A retry storm drives CPU, latency and errors up together — a bad deploy's exact
+shape — and benign deploys ship often enough that one plausibly landed just before. The
+remediations are opposite (`failover` vs `rollback`), and **the metrics cannot settle it**.
+The log line names the failing upstream, which is why M3's agent reads text rather than
+narrating numbers.
+
+### Benign deploys (added M2)
+
+Real fleets ship constantly and ~93% of deploys are uneventful — a version bump and nothing
+else. Without them, every version bump in the stream would be one that broke something and
+`since_deploy_s` would be a perfect `bad_deploy` oracle: the model would learn
+"a deploy just landed ⇒ bad deploy", score ~1.0, and have learned nothing. With them, deploy
+recency is **necessary but not sufficient**.
 
 ## Action space
 

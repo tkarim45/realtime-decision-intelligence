@@ -6,10 +6,11 @@
 > modeling — all under drift monitoring. Runs on an Apple M1 (8 GB): small on-device
 > models for scoring, local + cloud LLM routed for reasoning.
 
-**Status:** 🚧 **M0–M1 of 6 complete.** Domain committed (**AIOps**); labeled synthetic
-telemetry stream; durable at-least-once broker with **crash recovery proven (1200/1200, 0
-lost)**; train=serve online features at **0.0 skew**, hot path **p99 0.30ms**. 75 tests, ruff
-clean. Scoring (M2) onward pending. Build from
+**Status:** 🚧 **M0–M1 of 6 complete, M2 started (1/5 steps).** Domain committed (**AIOps**);
+labeled synthetic telemetry stream; durable at-least-once broker with **crash recovery proven
+(1200/1200, 0 lost)**; train=serve online features at **0.0 skew**, hot path **p99 0.30ms**;
+hot-path incident classifier at **macro-F1 0.863** (temporal split). 94 tests, ruff clean.
+Anomaly detection, conformal, MLX encoder and the load test are pending. Build from
 [`docs/02-build-plan.md`](docs/02-build-plan.md).
 
 **Capstone #3 of 3.** Siblings: `self-improving-agent-platform`,
@@ -191,6 +192,49 @@ contaminated by the very incidents it should expose, so **outages read milder th
 *(mean `latency_over_baseline`)* A memory leak reading 1.56× instead of 2.77× is a feature
 that is least trustworthy exactly where it matters most.
 
+## M2 results (step 1 of 5)
+
+**The model does not predict `label`.** The SLO breach is a deterministic function of two
+features — 0/3600 disagreements with the raw if-statement — so a classifier on it would score
+~1.0 and be an if-statement in disguise. The target is `incident_type`, because that is what
+picks the remediation. `label` is an observation for M4, not a target.
+
+**The generator was too clean, and it would have made M2–M4 vacuous.** With the M0
+fingerprints the honest macro-F1 was 0.970 and `dependency_failure`/`traffic_spike` both hit
+1.00 — `cpu`, `rps` and `error_rate` each separated them perfectly *and independently*. A
+saturated classifier means always-singleton conformal sets, no ambiguity for the agent, and
+trivial uplift. Fixed with realism (retry storms, partial upstream degradation, saturation
+errors, modest spikes, benign deploys), each justified on its own terms.
+
+```
+TEMPORAL SPLIT (train on the past, test on the future)   macro-F1 0.863
+  class                    P     R     F1      n
+  normal                0.97  0.99   0.98   8588
+  memory_leak           0.93  0.84   0.88   1321
+  dependency_failure    0.83  0.50   0.62    184     ← the hard class
+  traffic_spike         1.00  0.89   0.94    238
+  bad_deploy            0.80  1.00   0.89    361
+
+RANDOM SPLIT (leaky)                                     macro-F1 0.983
+  inflation             +0.121 macro-F1 of illusion
+```
+
+**A leak only shows where there's headroom.** The random-split leak (an episode spans 40–300
+near-identical ticks, so shuffling scores the model on ticks whose neighbours it memorized)
+was worth **+0.020** on the saturated generator and **+0.121** on the realistic one. Same
+leak — the easy task had no room to show it.
+
+**The honest weakness: `dependency_failure` recall 0.50, and 84/184 are misread as
+`bad_deploy`.** A retry storm drives CPU, latency and errors up together — a bad deploy's
+exact shape — and benign deploys ship often enough that one plausibly landed just before. The
+remediations are opposite (`failover` vs `rollback`). **The metrics cannot settle it**; the
+log line names the failing upstream, which is why M3's agent reads text.
+
+**Corrections this forced to earlier claims:** CPU is *not* the discriminator (retry storms
+make it bimodal — its mean of ~0.9 describes no actual tick); `rps` was doing the work. And a
+plain time cut left `bad_deploy` with **zero test examples** while `evaluate` quietly averaged
+over the survivors — both now raise instead of reporting a 4-class number as macro-F1.
+
 **A bug worth stating: a rolling *mean* baseline eats its own incident.** Over a sustained
 outage the baseline climbs to meet the outage and `latency_over_baseline` decays toward 1.0 —
 a 3.0× outage measured **1.13× by its end, 89% of the signal gone**. Incidents run 40–300
@@ -205,20 +249,21 @@ anomaly-vs-incident split made visible:
 ```
 events                3600
 SLO                   latency_ms > 500  or  error_rate > 0.05
-breaching (label=1)   419  (11.6%)
-latency p50 / p99     90ms / 531ms
+breaching (label=1)   442  (12.3%)
+latency p50 / p99     89ms / 552ms
 
 incident_type          count      of which breaching (label=1)
-  normal                 2582           0  (0%)
-  memory_leak             659         132  (20%)     ← ramps; most ticks pre-breach
+  normal                 2599           0  (0%)
+  memory_leak             621         144  (23%)     ← ramps; most ticks pre-breach
   bad_deploy              159         159  (100%)    ← step change; breaks instantly
-  traffic_spike           107          35  (33%)     ← the rest are absorbed: don't act
-  dependency_failure       93          93  (100%)
+  traffic_spike           129          47  (36%)     ← the rest are absorbed: don't act
+  dependency_failure       92          92  (100%)
 ```
 
-Detecting `bad_deploy` and `dependency_failure` is trivial (the SLO alone catches them). The
-hard part — and M4's actual job — is telling them *apart*, since they demand opposite
-remediations (`rollback` vs `failover`).
+*Detecting* `bad_deploy` and `dependency_failure` is trivial — the SLO alone catches them, at
+100% each. The hard part is telling them *apart*, since they demand opposite remediations
+(`rollback` vs `failover`), and **M2 measured that as the real weakness**: recall 0.50, with
+84/184 dependency failures misread as bad deploys. See [M2 results](#m2-results-step-1-of-5).
 
 ## Tech stack
 

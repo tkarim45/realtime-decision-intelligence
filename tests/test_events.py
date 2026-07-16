@@ -163,24 +163,70 @@ def test_traffic_spike_shows_high_rps_and_high_cpu(stream):
     assert _mean(spikes, "cpu_pct") > _mean(normal, "cpu_pct")
 
 
-def test_traffic_spike_and_dependency_failure_are_separable_by_cpu(stream):
-    """Stated as its own test because M2's whole job rests on it."""
-    assert _mean(_of_type(stream, "traffic_spike"), "cpu_pct") > \
-           _mean(_of_type(stream, "dependency_failure"), "cpu_pct")
+def test_retry_storms_make_some_dependency_failures_burn_cpu(stream):
+    """Realism that costs the model its easiest discriminator.
+
+    When an upstream fails, clients retry, and retries burn CPU. So a dependency failure does
+    not reliably look like an idle service waiting on I/O — a good fraction look busy, which
+    is exactly what a traffic spike looks like. Without this the generator handed the model a
+    perfectly separable pair and the whole scoring layer scored ~1.0 on nothing.
+    """
+    dep = _of_type(stream, "dependency_failure")
+    normal_cpu = _mean([e for e in stream if e["incident_type"] is None], "cpu_pct")
+    busy = [e for e in dep if e["cpu_pct"] > normal_cpu]
+    assert 0.15 < len(busy) / len(dep) < 0.85, \
+        f"{len(busy) / len(dep):.0%} of dependency failures burn CPU — expected a real mix"
+
+
+def _deploys(stream: list[dict]) -> list[dict]:
+    """Every tick where this service's version changed from the previous tick."""
+    by_service: dict[str, list[dict]] = {}
+    for e in stream:
+        by_service.setdefault(e["service"], []).append(e)
+    out = []
+    for series in by_service.values():
+        for prev, cur in zip(series, series[1:], strict=False):
+            if cur["version"] != prev["version"]:
+                out.append(cur)
+    return out
 
 
 def test_bad_deploy_bumps_the_version(stream):
     """The deploy marker is the causal evidence the LLM agent cites to justify rollback."""
-    by_service: dict[str, list[dict]] = {}
-    for e in stream:
-        by_service.setdefault(e["service"], []).append(e)
-    bumped = False
-    for series in by_service.values():
-        for prev, cur in zip(series, series[1:], strict=False):
-            if cur["version"] != prev["version"]:
-                assert cur["incident_type"] == "bad_deploy"
-                bumped = True
-    assert bumped, "no deploy occurred — bad_deploy has no marker to explain"
+    starts = [e for e in _deploys(stream) if e["incident_type"] == "bad_deploy"]
+    assert starts, "no bad deploy occurred — bad_deploy has no marker to explain"
+
+
+def test_most_deploys_are_benign(stream):
+    """Real fleets ship constantly and almost every deploy is fine.
+
+    If every version bump were a bad deploy, `since_deploy_s` would be a perfect oracle: a
+    model would learn `deploy just happened => bad_deploy`, score ~1.0, and have learned
+    nothing. Deploy recency must be necessary but NOT sufficient.
+    """
+    deploys = _deploys(stream)
+    assert len(deploys) >= 10, f"only {len(deploys)} deploys — too few to break the oracle"
+    benign = [e for e in deploys if e["incident_type"] is None]
+    assert len(benign) / len(deploys) > 0.5, "most deploys should be uneventful"
+
+
+def test_benign_deploys_do_not_breach_the_slo(stream):
+    """A deploy that ships fine is not an incident and must not be labeled as one."""
+    for e in _deploys(stream):
+        if e["incident_type"] is None:
+            assert e["label"] == 0
+
+
+def test_a_deploy_alone_does_not_identify_a_bad_deploy(stream):
+    """The oracle test, stated directly: deploy recency cannot separate the classes by itself.
+
+    The model has to pair 'a deploy just landed' with the latency/error step to tell a bad
+    deploy from the uneventful majority.
+    """
+    deploys = _deploys(stream)
+    kinds = {e["incident_type"] for e in deploys}
+    assert None in kinds and "bad_deploy" in kinds, \
+        "deploys must span both benign and bad, or the feature is an oracle"
 
 
 def test_bad_deploy_raises_latency_and_errors_together(stream):
@@ -193,11 +239,28 @@ def test_bad_deploy_raises_latency_and_errors_together(stream):
 # ---- logs carry signal for the LLM ----
 
 def test_log_lines_are_incident_flavored(stream):
-    for kind, needle in [("memory_leak", "heap"), ("dependency_failure", "timeout"),
+    for kind, needle in [("memory_leak", "heap"), ("dependency_failure", "upstream"),
                          ("traffic_spike", "queue depth"), ("bad_deploy", "Exception")]:
         sample = _of_type(stream, kind)
         assert sample, f"no {kind} events"
         assert all(needle in e["log"] for e in sample)
+
+
+def test_dependency_failure_logs_name_the_upstream_even_under_a_retry_storm(stream):
+    """The log is what resolves the ambiguity the metrics cannot.
+
+    A retry-storm dependency failure is metrically indistinguishable from a bad deploy — CPU,
+    latency and errors all up together. Its log still names the failing upstream, so M3's
+    agent can settle from text what the hot path cannot settle from numbers. If retry-storm
+    logs stopped naming the upstream, the ambiguity would become genuinely unresolvable.
+    """
+    dep = _of_type(stream, "dependency_failure")
+    retrying = [e for e in dep if "retrying" in e["log"]]
+    assert retrying, "no retry-storm logs — the hard case is missing"
+    for e in dep:
+        assert any(u in e["log"] for u in
+                   ("payments-db", "ledger-db", "search-index", "session-store",
+                    "cart-cache", "feature-store"))
 
 
 def test_bad_deploy_log_cites_the_deployed_version(stream):

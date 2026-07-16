@@ -82,19 +82,55 @@ Steps:
 
 ---
 
-## Milestone 2 — Scoring layer (Week 7–12)
+## Milestone 2 — Scoring layer (Week 7–12) — 🚧 step 1 of 5 done
 
 **Goal:** real-time scoring meeting a latency SLO, with calibrated uncertainty.
 
+**What step 1 established (and had to fix first):**
+
+- **The target is `incident_type`, not `label`.** The SLO breach is a deterministic function
+  of two features (`latency_ms > 500 or error_rate > 0.05`) — 0/3600 disagreements with the
+  raw if-statement. A classifier on it would score ~1.0 and be an if-statement in disguise.
+  `label` is an *observation* for M4 (was an intervention warranted?), never a target.
+- **The generator was too clean, and it would have made M2–M4 vacuous.** With the M0
+  fingerprints the honest macro-F1 was 0.970 and `dependency_failure`/`traffic_spike` both
+  scored 1.00 — `cpu`, `rps` and `error_rate` each separated them *perfectly and
+  independently*. A saturated classifier means always-singleton conformal sets (M2), no
+  ambiguity for the agent (M3), and trivial uplift (M4). Fixed with realism, each change
+  justified on its own: **retry storms** (retries burn CPU, so a third of dependency failures
+  run CPU *up*), **partial upstream degradation** (errors 0.08–0.60), **saturation errors** on
+  breaking spikes, **modest 1.5× spikes**, and **benign deploys** (~93% of deploys are
+  uneventful — without them `since_deploy_s` was a perfect `bad_deploy` oracle).
+- **Honest score after realism: macro-F1 0.863** (temporal split). The hard class is
+  `dependency_failure` at **recall 0.50**, and it is mistaken for **`bad_deploy`** (84/184) —
+  the metrics genuinely cannot settle it, which is M3's reason to read logs.
+- **A leak only shows where there's headroom.** The random-split leak was worth **+0.020**
+  macro-F1 on the saturated generator and **+0.121** on the realistic one. Same leak; the
+  saturated task had no room to show it.
+- **A silent eval bug:** a plain time cut left `bad_deploy` with *zero* test examples and
+  `evaluate` quietly averaged over the survivors, reporting a 4-class number as macro-F1.
+  Both `temporal_split` and `evaluate` now raise instead.
+- **Warnings are errors now.** A sklearn feature-name warning fired on every predict for a
+  whole milestone unread; an attempted fix was a silent no-op (`feature_names_in_` is a
+  read-only property) and only warnings-as-errors caught that.
+
 Steps:
-1. Train the **classical hot-path model** (LightGBM/sklearn) offline; serve it sub-ms.
-2. Train the **small MLX sequence encoder** (1–20M params) on-device for richer signal;
-   keep it small enough to run inline. (See `docs/03-setup.md` for MLX.)
-3. Add the **anomaly detector** (IsolationForest / from-scratch). Reuse
-   `timeseries-anomaly-detection`.
-4. **Ensemble + calibrate**; add **conformal prediction** (reuse `conformal-prediction`) —
-   verify empirical coverage hits the target on the stream.
-5. **Load-test** the hot path: measure throughput + p50/p99; state SLOs.
+1. ✅ **Classical hot-path model** (`src/rdi/model.py`, LightGBM): 5-class `incident_type`,
+   temporal split, macro-F1 **0.863**. `make score`. Sub-ms serving measured in step 5.
+2. Add the **anomaly detector** (IsolationForest / from-scratch). Reuse
+   `timeseries-anomaly-detection`. The test that earns it: hold out one incident type from
+   training, show the classifier mislabels it (it can only name what it has seen) while the
+   detector still flags it. That is what "unknown-unknowns" has to mean to be worth the code.
+3. **Ensemble + calibrate**; add **conformal prediction** (reuse `conformal-prediction`) —
+   verify empirical coverage hits the target on the stream. The payoff is now real: on the
+   `dependency_failure`/`bad_deploy` confusion the set should come back
+   `{dependency_failure, bad_deploy}` — an explicit "the metrics can't settle this", which is
+   exactly when M3 should read the log and M4 should not auto-remediate.
+4. Train the **small MLX sequence encoder** (1–20M params) on-device for richer signal; keep
+   it small enough to run inline. (See `docs/03-setup.md` for MLX.) Honest bar: it must beat
+   0.863 macro-F1 on the *temporal* split to justify its latency and memory, or it gets cut.
+5. **Load-test** the hot path: measure throughput + p50/p99; state SLOs. Budget so far —
+   features cost p99 0.30ms of a sub-ms target.
 
 **Artifact:** load-test report (throughput + p99) + a conformal coverage plot.
 

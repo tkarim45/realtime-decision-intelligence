@@ -267,12 +267,24 @@ def test_memory_leak_shows_a_positive_memory_slope(events):
     assert leak.mean() > normal.mean() + 0.4
 
 
-def test_dependency_failure_shows_cpu_below_baseline(events):
-    """The discriminator. Threads blocked on I/O: latency up, CPU *down*."""
+def test_dependency_failure_cpu_is_bimodal_not_uniformly_low(events):
+    """CPU is NOT the clean discriminator the domain doc first claimed.
+
+    Blocked threads push CPU down, but clients retry and retries burn CPU — so ~a third of
+    dependency-failure ticks run CPU *above* baseline. The distribution is bimodal, and its
+    mean (~0.9) therefore describes no actual tick. The earlier version of this test asserted
+    `mean < 0.9` and passed on an average that misrepresented a third of the data.
+    """
     m = compute_offline(events)
-    dep = _rows_for(events, m, "dependency_failure")
-    assert dep[:, F["cpu_over_baseline"]].mean() < 0.9
-    assert dep[:, F["latency_over_baseline"]].mean() > 1.5
+    dep = _rows_for(events, m, "dependency_failure")[:, F["cpu_over_baseline"]]
+    below, above = float((dep < 1.0).mean()), float((dep > 1.0).mean())
+    assert below > 0.4, f"only {below:.0%} of dep ticks run CPU below baseline"
+    assert above > 0.15, f"only {above:.0%} run CPU above baseline — retry storms missing"
+
+
+def test_dependency_failure_still_blows_latency(events):
+    m = compute_offline(events)
+    assert _rows_for(events, m, "dependency_failure")[:, F["latency_over_baseline"]].mean() > 1.5
 
 
 def test_traffic_spike_shows_cpu_and_rps_above_baseline(events):
@@ -282,13 +294,25 @@ def test_traffic_spike_shows_cpu_and_rps_above_baseline(events):
     assert spike[:, F["cpu_over_baseline"]].mean() > 1.2
 
 
-def test_cpu_over_baseline_separates_the_two_high_latency_incidents(events):
-    """M2's job in one assertion: both blow latency, they demand opposite remediations
-    (failover vs scale_out), and this feature is what tells them apart."""
+def test_rps_not_cpu_is_what_separates_the_two_high_latency_incidents(events):
+    """Corrects the original claim. Both incidents blow latency and demand opposite
+    remediations (failover vs scale_out); the question is which feature actually tells them
+    apart once retry storms exist.
+
+    Not CPU: the ranges overlap, so no threshold on it separates the classes.
+    It is `rps_over_baseline` — a traffic spike genuinely has traffic and a failing
+    dependency does not. Boring, and true.
+    """
     m = compute_offline(events)
-    dep = _rows_for(events, m, "dependency_failure")[:, F["cpu_over_baseline"]]
-    spike = _rows_for(events, m, "traffic_spike")[:, F["cpu_over_baseline"]]
-    assert dep.mean() < 1.0 < spike.mean()
+    dep_cpu = _rows_for(events, m, "dependency_failure")[:, F["cpu_over_baseline"]]
+    spike_cpu = _rows_for(events, m, "traffic_spike")[:, F["cpu_over_baseline"]]
+    assert max(dep_cpu.min(), spike_cpu.min()) <= min(dep_cpu.max(), spike_cpu.max()), \
+        "CPU ranges no longer overlap — the retry storms that make this realistic are gone"
+
+    dep_rps = _rows_for(events, m, "dependency_failure")[:, F["rps_over_baseline"]]
+    spike_rps = _rows_for(events, m, "traffic_spike")[:, F["rps_over_baseline"]]
+    assert dep_rps.max() < spike_rps.max()
+    assert dep_rps.mean() < 1.5 < spike_rps.mean()
 
 
 def test_bad_deploy_is_recent_after_a_deploy(events):

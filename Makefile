@@ -1,4 +1,4 @@
-.PHONY: install test lint stream summary drift recover parity
+.PHONY: install test lint stream summary drift recover parity score
 
 install:
 	pip install -e ".[dev]"
@@ -26,3 +26,7 @@ recover:
 
 parity:
 	rdi-demo parity
+
+# M2: hot-path incident classifier, temporal vs random split.
+score:
+	rdi-demo score

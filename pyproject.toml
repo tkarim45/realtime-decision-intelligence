@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Taimour Abdul Karim", email = "taimour.a.karim@gmail.com" }]
 keywords = ["aiops", "streaming", "real-time", "conformal-prediction", "uplift-modeling", "causal-inference", "drift-detection", "llm-agent", "mlops"]
-dependencies = ["numpy>=1.24"]
+dependencies = ["numpy>=1.24", "scikit-learn>=1.3", "lightgbm>=4.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]
@@ -26,6 +26,18 @@ packages = ["src/rdi"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Warnings are errors. A sklearn feature-name warning fired on every predict for a whole
+# milestone before anyone read it; a suite that prints warnings nobody reads is a suite that
+# hides them. Ignores below must name the warning and say why it cannot be fixed.
+filterwarnings = [
+    "error",
+    # LightGBM stamps feature_names_in_ = ['Column_0', ...] on any fit, including one on an
+    # unnamed ndarray, and it is a read-only property (deleting it silently no-ops). sklearn
+    # then warns on every ndarray predict about a mismatch against placeholders that never
+    # carried meaning. The alternative — fitting and predicting on DataFrames — would put
+    # per-event DataFrame construction on a sub-ms hot path. See rdi/model.py::train.
+    "ignore:X does not have valid feature names:UserWarning",
+]
 
 [tool.ruff]
 line-length = 100

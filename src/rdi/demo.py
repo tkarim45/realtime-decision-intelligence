@@ -95,14 +95,68 @@ def parity(n_ticks: int = 600) -> int:  # 600: short enough to be quick, long en
     return 0
 
 
+def score(n_ticks: int = 6000) -> int:
+    """Train the hot-path classifier; show the honest score and what a random split pretends."""
+    from rdi.model import (
+        WARMUP_TICKS,
+        build_dataset,
+        evaluate,
+        importances,
+        random_split,
+        temporal_split,
+        train,
+    )
+
+    events = generate(n_ticks=n_ticks, seed=7, incidents_per_service=10)
+    X, y, ts = build_dataset(events)
+    print(f"events                {len(X)} (after a {WARMUP_TICKS:.0f}-tick warmup)")
+    print("target                incident_type — NOT `label`, which is the SLO if-statement")
+    print()
+
+    Xtr, Xte, ytr, yte = temporal_split(X, y, ts)
+    model = train(Xtr, ytr)
+    t = evaluate(model, Xte, yte)
+
+    print(f"TEMPORAL SPLIT (train on the past, test on the future)   "
+          f"macro-F1 {t['macro_f1']:.3f}")
+    print(f"  {'class':<20}{'P':>6}{'R':>6}{'F1':>7}{'n':>7}")
+    for c, s in t["per_class"].items():
+        print(f"  {c:<20}{s['precision']:>6.2f}{s['recall']:>6.2f}"
+              f"{s['f1']:>7.2f}{s['support']:>7}")
+
+    print()
+    print("  confusion (rows = truth)")
+    print(f"  {'':<20}" + "".join(f"{c[:9]:>11}" for c in t["labels"]))
+    for c, row in zip(t["labels"], t["confusion"], strict=True):
+        print(f"  {c:<20}" + "".join(f"{v:>11}" for v in row))
+
+    rXtr, rXte, rytr, ryte = random_split(X, y, ts)
+    r = evaluate(train(rXtr, rytr), rXte, ryte)
+    print()
+    print(f"RANDOM SPLIT (leaky)                                     "
+          f"macro-F1 {r['macro_f1']:.3f}")
+    print(f"  inflation             {r['macro_f1'] - t['macro_f1']:+.3f} macro-F1 of illusion")
+    print("  An episode spans 40-300 near-identical ticks. Shuffling puts tick 41 in train and")
+    print("  tick 42 in test, so the model is scored on ticks whose neighbours it memorized.")
+
+    print()
+    print("  feature importance   " + "  ".join(f"{n}={v}" for n, v in importances(model)[:4]))
+    print()
+    print("  The hard class is dependency_failure, and it is mistaken for bad_deploy: a retry")
+    print("  storm drives CPU, latency and errors up together — exactly a bad deploy's shape —")
+    print("  and benign deploys ship often enough that one recently landed. Opposite fixes")
+    print("  (failover vs rollback). The metrics cannot settle it; the log line names the")
+    print("  upstream, which is M3's job.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="rdi-demo")
-    ap.add_argument("demo", choices=["recover", "parity"])
+    ap.add_argument("demo", choices=["recover", "parity", "score"])
     ap.add_argument("--n", type=int, default=None)
     args = ap.parse_args(argv)
-    if args.demo == "recover":
-        return recover(**({"n_ticks": args.n} if args.n else {}))
-    return parity(**({"n_ticks": args.n} if args.n else {}))
+    fn = {"recover": recover, "parity": parity, "score": score}[args.demo]
+    return fn(**({"n_ticks": args.n} if args.n else {}))
 
 
 if __name__ == "__main__":

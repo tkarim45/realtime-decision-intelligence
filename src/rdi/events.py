@@ -67,6 +67,14 @@ _UPSTREAM = {
 
 _DIURNAL_PERIOD_S = 900.0  # compressed "day" — a full traffic cycle every 15 min of stream
 
+# Mean ticks between BENIGN deploys per service. Real fleets ship constantly and almost every
+# deploy is fine. Without these, the only version bumps in the stream would be the ones that
+# broke something, and "a deploy happened" would be a perfect bad_deploy oracle — a model would
+# learn `since_deploy_s < 300 => bad_deploy` and score ~1.0 on a task that doesn't exist.
+# With them, deploy recency is necessary but not sufficient: the model has to pair it with the
+# latency/error step to tell a bad deploy from the ~80% of deploys that are uneventful.
+_BENIGN_DEPLOY_EVERY = 120.0
+
 
 def _baseline_profile(rng: np.random.Generator) -> dict:
     return {
@@ -106,15 +114,45 @@ def _schedule(rng: np.random.Generator, n_ticks: int, per_service: int) -> list[
             # ~40% of spikes are ABSORBED: the service handles the load, latency stays under
             # SLO, label=0. Scaling out for these is a pure loss — that's the uplift signal.
             ep["absorbed"] = bool(rng.random() < 0.40)
-            ep["magnitude"] = float(rng.uniform(3.0, 6.0))
+            # Down to 1.5x: a modest surge into a service already near capacity is the common
+            # real spike. Only allowing 3-6x made every spike unmistakable on rps alone.
+            ep["magnitude"] = float(rng.uniform(1.5, 6.0))
+            # A saturated service returns 503s and times out. Spikes with zero errors were an
+            # artifact that let error_rate separate spike from dependency_failure perfectly.
+            ep["err"] = float(rng.uniform(0.02, 0.15))
         elif kind == "dependency_failure":
             ep["magnitude"] = float(rng.uniform(3.0, 8.0))
-            ep["err"] = float(rng.uniform(0.30, 0.60))
+            # Widened from 0.30-0.60: upstreams degrade partially far more often than they
+            # die outright, and a 0.08 partial failure overlaps a saturated spike's errors.
+            ep["err"] = float(rng.uniform(0.08, 0.60))
+            # RETRY STORM. When an upstream fails, clients retry — and retries burn CPU. So
+            # half of dependency failures show CPU *up*, not down. This is the realism that
+            # breaks cpu_over_baseline as a clean discriminator: with it, the same feature
+            # that identifies a dependency failure points the opposite way half the time.
+            ep["retry_storm"] = bool(rng.random() < 0.50)
         elif kind == "bad_deploy":
             ep["magnitude"] = float(rng.uniform(2.0, 4.0))
             ep["err"] = float(rng.uniform(0.08, 0.25))
         episodes.append(ep)
     return sorted(episodes, key=lambda e: e["start"])
+
+
+def _benign_deploys(rng: np.random.Generator, n_ticks: int, episodes: list[dict]) -> set[int]:
+    """Uneventful deploys: a version bump and nothing else.
+
+    Skipped inside a bad_deploy episode — a benign deploy landing mid-outage would bump the
+    version a second time and hand the model a bogus 'deploy just happened' reset for an
+    incident already in progress.
+    """
+    bad_spans = [(e["start"], e["end"]) for e in episodes if e["kind"] == "bad_deploy"]
+    ticks, t = set(), 0.0
+    while True:
+        t += rng.exponential(_BENIGN_DEPLOY_EVERY)
+        if t >= n_ticks:
+            return ticks
+        tick = int(t)
+        if not any(lo <= tick < hi for lo, hi in bad_spans):
+            ticks.add(tick)
 
 
 def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> dict:
@@ -128,11 +166,11 @@ def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> 
         m["error_rate"] += 0.09 * p**3
         m["cpu_pct"] += 12.0 * p  # GC burns some CPU
     elif kind == "dependency_failure":
-        # Threads blocked on I/O: latency and errors explode while CPU goes DOWN — the
-        # service isn't working, it's waiting. That's what separates this from a spike.
+        # Threads blocked on I/O: latency and errors explode. CPU goes DOWN — the service
+        # isn't working, it's waiting — UNLESS clients are retrying, and then it goes up.
         m["latency_ms"] *= ep["magnitude"]
         m["error_rate"] = ep["err"]
-        m["cpu_pct"] *= 0.6
+        m["cpu_pct"] *= float(rng.uniform(1.5, 2.2)) if ep["retry_storm"] else 0.6
         m["rps"] *= 0.9
     elif kind == "traffic_spike":
         mag = ep["magnitude"]
@@ -140,7 +178,7 @@ def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> 
         m["cpu_pct"] = min(97.0, m["cpu_pct"] * (1.0 + 0.35 * mag))
         # Absorbed: latency rises but stays comfortably under SLO. Breaking: blows through it.
         m["latency_ms"] *= 1.6 if ep["absorbed"] else (1.0 + 1.2 * mag)
-        m["error_rate"] += 0.004 if ep["absorbed"] else 0.02
+        m["error_rate"] += 0.004 if ep["absorbed"] else ep["err"]
     elif kind == "bad_deploy":
         # Step change, not a ramp: latency and errors move together the instant the version
         # lands, and stay there until someone rolls back.
@@ -150,12 +188,21 @@ def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> 
 
 
 def _log_line(service: str, kind: str | None, m: dict, version: str,
-              rng: np.random.Generator) -> str:
-    """A log line per tick — the LLM agent's raw material, flavored by what's actually wrong."""
+              rng: np.random.Generator, ep: dict | None = None) -> str:
+    """A log line per tick — the LLM agent's raw material, flavored by what's actually wrong.
+
+    This is where the metrics' ambiguity gets resolved. A retry-storm dependency failure looks
+    like a traffic spike on CPU and error rate, but its log names the upstream and the retry —
+    so M3's agent can settle from text what the hot path cannot settle from numbers.
+    """
     if kind == "memory_leak":
         return (f"GC pause {int(rng.uniform(180, 900))}ms; heap at {m['mem_pct']:.0f}% of limit; "
                 f"old-gen collection did not reclaim")
     if kind == "dependency_failure":
+        if ep is not None and ep.get("retry_storm"):
+            return (f"upstream {_UPSTREAM[service]} 503; retrying "
+                    f"({int(rng.uniform(3, 9))}/9 attempts), backoff exhausted on "
+                    f"{int(rng.uniform(40, 200))} calls")
         return (f"upstream {_UPSTREAM[service]} timeout after 5000ms; "
                 f"connection pool exhausted ({int(rng.uniform(20, 60))} waiting)")
     if kind == "traffic_spike":
@@ -187,6 +234,8 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
         schedules = {s: [] for s in SERVICES}
     else:
         schedules = {s: _schedule(rng, n_ticks, incidents_per_service) for s in SERVICES}
+    # Deploys keep shipping on a drifted stream too — drift is not a deploy freeze.
+    benign = {s: _benign_deploys(rng, n_ticks, schedules[s]) for s in SERVICES}
 
     events: list[dict] = []
     for tick in range(n_ticks):
@@ -202,6 +251,10 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
                 "mem_pct": base["mem_pct"] * float(rng.normal(1.0, 0.04)),
                 "rps": base["rps"] * diurnal * float(rng.normal(1.0, 0.10)),
             }
+
+            if tick in benign[service]:
+                versions[service][1] += 1  # a deploy that shipped and was fine
+                versions[service][2] = 0
 
             active = next((e for e in schedules[service] if e["start"] <= tick < e["end"]), None)
             kind = active["kind"] if active else None
@@ -225,7 +278,7 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
                 "cpu_pct": round(m["cpu_pct"], 2),
                 "mem_pct": round(m["mem_pct"], 2),
                 "rps": round(m["rps"], 2),
-                "log": _log_line(service, kind, m, version, rng),
+                "log": _log_line(service, kind, m, version, rng, active),
                 "incident_type": kind,
                 # Derived, not painted on — the SLO is the ground-truth definition.
                 "label": int(m["latency_ms"] > SLO_LATENCY_MS or m["error_rate"] > SLO_ERROR_RATE),
