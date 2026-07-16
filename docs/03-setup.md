@@ -23,7 +23,7 @@ on an 8 GB M1 and nobody compiles `llama-cpp-python` to look at a JSONL stream:
 
 | Milestone | Adds |
 |---|---|
-| M1 broker/features | — (stdlib + numpy) |
+| M1 broker/features | ✅ none — stdlib + numpy |
 | M2 scoring | `scikit-learn`, `lightgbm`, `mlx`, `mlx-lm` |
 | M3 reasoning | `llama-cpp-python`, `anthropic[bedrock]`, `mcp`, `httpx` |
 | M4 decision | `pandas`, `statsmodels` |
@@ -73,7 +73,9 @@ decision is cheap (rule/heuristic on flag severity + context size).
 make summary      # ✅ M0 — ground-truth breakdown of the labeled stream
 make stream       # ✅ M0 — labeled JSONL on stdout
 make drift        # ✅ M0 — the M5 fixture: shifted baseline, zero incidents
-make test         # ✅ M0 — 36 tests
+make recover      # ✅ M1 — kill a consumer mid-stream, lose nothing (S1)
+make parity       # ✅ M1 — train=serve at 0.0 skew + the leak quantified
+make test         # ✅ 75 tests
 make score        # M2 — scoring workers
 make dashboard    # M6 — real-time UI
 ```

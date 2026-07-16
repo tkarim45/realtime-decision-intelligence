@@ -18,6 +18,7 @@ dev = ["pytest>=7", "ruff>=0.4"]
 
 [project.scripts]
 rdi-stream = "rdi.cli:main"
+rdi-demo = "rdi.demo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rdi"]

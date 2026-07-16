@@ -6,9 +6,11 @@
 > modeling — all under drift monitoring. Runs on an Apple M1 (8 GB): small on-device
 > models for scoring, local + cloud LLM routed for reasoning.
 
-**Status:** 🚧 **Milestone 0 complete** — domain committed (**AIOps**), package skeleton, and a
-labeled synthetic telemetry stream with 36 passing tests. No *measured system* results yet
-(M1–M6 pending). Build from [`docs/02-build-plan.md`](docs/02-build-plan.md).
+**Status:** 🚧 **M0–M1 of 6 complete.** Domain committed (**AIOps**); labeled synthetic
+telemetry stream; durable at-least-once broker with **crash recovery proven (1200/1200, 0
+lost)**; train=serve online features at **0.0 skew**, hot path **p99 0.30ms**. 75 tests, ruff
+clean. Scoring (M2) onward pending. Build from
+[`docs/02-build-plan.md`](docs/02-build-plan.md).
 
 **Capstone #3 of 3.** Siblings: `self-improving-agent-platform`,
 `ondevice-model-lifecycle`. Effort: **6–12 months solo**.
@@ -125,16 +127,21 @@ realtime-decision-intelligence/
 ├── src/rdi/
 │   ├── events.py       # ✅ M0 — labeled synthetic AIOps stream
 │   ├── cli.py          # ✅ M0 — `rdi-stream`, JSONL on stdout
-│   ├── broker/         # M1 — durable event log (consumer groups, at-least-once)
-│   ├── features/       # M1 — online windowed features, train=serve
+│   ├── broker.py       # ✅ M1 — durable event log (consumer groups, at-least-once)
+│   ├── consumer.py     # ✅ M1 — claim → features → ack
+│   ├── features.py     # ✅ M1 — online windowed features, train=serve
+│   ├── demo.py         # ✅ M1 — `rdi-demo recover|parity`
 │   ├── scoring/        # M2 — classical + MLX encoder + anomaly + conformal
 │   ├── reasoning/      # M3 — LLM agent: explain + remediate (routed)
 │   ├── decision/       # M4 — uplift + policy + experimentation
 │   └── ops/            # M5 — drift, retrain, canary/shadow, rollback
-├── tests/              # ✅ 36 passing
+├── tests/              # ✅ 75 passing
 ├── dashboard/          # M6 — Next.js real-time UI
 └── data/               # gitignored
 ```
+
+Single-file modules until a subsystem earns a package — `broker.py` is one class, and a
+`broker/__init__.py` re-exporting it would be a directory pretending to be architecture.
 
 ## Quickstart
 
@@ -147,8 +154,50 @@ make summary                     # ground-truth breakdown of the stream
 make stream                      # labeled JSONL on stdout
 make drift                       # M5 fixture: shifted baseline, zero incidents
 
+make recover                     # M1 — kill a consumer mid-stream, lose nothing
+make parity                      # M1 — train=serve, and the leak it prevents
+
 rdi-stream --n 600 | jq -c 'select(.label == 1)'
 ```
+
+## M1 results
+
+**`make recover` — at-least-once holds (S1).** Ack-*after*-processing is the whole guarantee:
+the crashed consumer's in-flight events stay in the broker's pending set and get redelivered.
+Ack-before would be faster and would silently drop every event in flight at the crash.
+
+```
+appended              1200 events (fsync on)
+consumer 'crash'      processed 400, then died
+in flight at crash    16 events claimed but never acked
+consumer 'rescue'     processed 800 (0 duplicates deduped)
+total processed       1200 / 1200      still pending  0
+EVENTS LOST: 0  ✅
+```
+
+**`make parity` — train=serve at 0.0 skew, and the leak quantified.** `compute_offline`
+replays the *online* code rather than reimplementing it, so the two paths agree by
+construction. The counterexample is kept and measured: a per-service mean over the whole
+series — what you get when training is pandas and serving is a stream worker — is
+contaminated by the very incidents it should expose, so **outages read milder than they are**:
+
+| incident | online | leaky |
+|---|---|---|
+| `dependency_failure` | 5.52 | 3.00 |
+| `bad_deploy` | 2.77 | 2.23 |
+| `traffic_spike` | 3.80 | 2.69 |
+| `memory_leak` | **2.77** | **1.56** |
+
+*(mean `latency_over_baseline`)* A memory leak reading 1.56× instead of 2.77× is a feature
+that is least trustworthy exactly where it matters most.
+
+**A bug worth stating: a rolling *mean* baseline eats its own incident.** Over a sustained
+outage the baseline climbs to meet the outage and `latency_over_baseline` decays toward 1.0 —
+a 3.0× outage measured **1.13× by its end, 89% of the signal gone**. Incidents run 40–300
+ticks, so this was the common case, not a corner. Fixed with a **median over a 900s window**:
+incidents stay a minority of the window, and a median tolerates 50% contamination where a
+mean tolerates none. Costs p99 **0.30ms** at a steady-state 901-deep window — measured, and
+inside M2's sub-ms budget with room for the model.
 
 `make summary` on the default seed — note the `label=1` column, which is the
 anomaly-vs-incident split made visible:

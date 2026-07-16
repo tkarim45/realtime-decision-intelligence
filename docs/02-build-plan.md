@@ -37,18 +37,48 @@ breakdown; `make drift` emits the M5 fixture. 36 tests, ruff clean.
 
 ---
 
-## Milestone 1 — Durable ingestion + features (Week 3–6)
+## Milestone 1 — Durable ingestion + features ✅ DONE
 
 **Goal:** at-least-once stream with proven crash recovery + train=serve features.
 
 Steps:
-1. Stand up the **file-backed streams broker** (reuse `realtime-ml-pipeline`): consumer
-   groups, offsets, at-least-once delivery.
-2. **Crash-recovery test**: kill a consumer mid-stream, restart, assert **0 events lost**.
-3. Implement **online windowed features** with the *same code* used offline for training
-   (train=serve). Write a test that proves offline and online feature vectors match.
+1. ✅ **File-backed streams broker** (`src/rdi/broker.py`, adapted from
+   `realtime-ml-pipeline`): consumer groups, offsets, at-least-once delivery. Two changes
+   from the sibling — the file handle stays open (reopening per append would have put a
+   syscall floor under M2's throughput that has nothing to do with the model), and `fsync`
+   is a real option rather than a docstring promise.
+2. ✅ **Crash recovery**: `make recover` kills a consumer mid-stream (400 processed, 16 in
+   flight), restarts, and finishes **1200/1200 — 0 events lost**, 0 pending. Ack-after-
+   processing is what buys this; the duplicates it implies are deduped by offset.
+3. ✅ **Online windowed features** (`src/rdi/features.py`), 8 features each earning its place
+   against a documented discriminator. `compute_offline` **replays the online code** rather
+   than reimplementing it — `make parity` shows max abs difference **0.0**.
 
-**Artifact:** crash-recovery test (0 lost) + a train=serve feature-parity test.
+**Artifact:** ✅ `make recover` (0 lost) + `make parity` (0.0 skew, and the leak quantified).
+75 tests, ruff clean.
+
+**What M1 established:**
+
+- **Train=serve is structural, not asserted.** One implementation, replayed offline. The
+  parity test is near-tautological *by design* and exists to fail loudly if someone later
+  "optimizes" training into a second implementation. The test with teeth is
+  `test_truncating_the_future_does_not_change_the_past` — a causality property that any
+  vectorized batch rewrite fails.
+- **The leak, quantified.** `compute_offline_leaky` (a per-service mean over the whole
+  series — what you write when training is pandas and serving is a stream worker) is kept as
+  a *measured counterexample*. It understates every incident because a service's mean latency
+  includes its own outages: `dependency_failure` 5.52 → 3.00, `memory_leak` **2.77 → 1.56**.
+  The feature is least trustworthy exactly where it matters.
+- **A real bug, found by a failing test: a rolling *mean* baseline eats its own incident.**
+  Over a sustained outage the baseline climbs to meet the outage and
+  `latency_over_baseline` decays toward 1.0 — measured, a 3.0× outage read as **1.13× by its
+  end (89% of the signal gone)**. Since incidents run 40–300 ticks, this was the common case.
+  Fixed with a **median over a 900s window**: incidents stay a minority of the window, and a
+  median tolerates 50% contamination where a mean tolerates none. (p25 also resists poisoning
+  but the diurnal cycle biases it low, so a healthy service would read ~1.3×.)
+- **Hot-path budget measured, not assumed.** The median is O(window) per metric; at a
+  steady-state 901-deep window it costs **p99 0.30ms** (~6,755 events/s single-threaded),
+  leaving room for M2's model inside the sub-ms SLO. Guarded loosely at p99 < 2ms.
 
 ---
 
@@ -152,7 +182,7 @@ broker.
 ## Milestone checklist
 
 - [x] **M0 Foundations — AIOps domain committed + labeled synthetic stream (36 tests)**
-- [ ] M1 Ingestion — 0-loss crash recovery + train=serve parity
+- [x] **M1 Ingestion — 0-loss crash recovery (1200/1200) + train=serve parity (0.0 skew)**
 - [ ] M2 Scoring — p99 SLO + conformal coverage
 - [ ] M3 Reasoning — grounded explanation + remediation, hot path unaffected
 - [ ] M4 Decision — validated causal lift, peeking-safe
