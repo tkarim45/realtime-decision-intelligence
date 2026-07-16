@@ -11,12 +11,24 @@
 
 ```bash
 source ~/miniconda3/etc/profile.d/conda.sh && conda activate personal
-pip install -r requirements.txt
+make install    # pip install -e ".[dev]"
+make test
 ```
 
-`requirements.txt`: `fastapi uvicorn websockets redis scikit-learn lightgbm numpy pandas
-statsmodels mlx mlx-lm llama-cpp-python anthropic[bedrock] mcp httpx prometheus-client
-pytest ruff black python-dotenv`.
+Dependencies live in `pyproject.toml`, not a `requirements.txt` — matching the sibling repos.
+**M0 needs only `numpy`** (plus pytest/ruff as dev extras — no black; see `02-build-plan.md`).
+Heavy deps are added to
+`pyproject.toml` by the milestone that actually needs them, so a fresh clone stays installable
+on an 8 GB M1 and nobody compiles `llama-cpp-python` to look at a JSONL stream:
+
+| Milestone | Adds |
+|---|---|
+| M1 broker/features | — (stdlib + numpy) |
+| M2 scoring | `scikit-learn`, `lightgbm`, `mlx`, `mlx-lm` |
+| M3 reasoning | `llama-cpp-python`, `anthropic[bedrock]`, `mcp`, `httpx` |
+| M4 decision | `pandas`, `statsmodels` |
+| M5 ops | `prometheus-client` |
+| M6 dashboard | `fastapi`, `uvicorn`, `websockets` (+ Next.js in `dashboard/`) |
 
 ## 2. Broker (no Kafka on 8 GB)
 
@@ -55,13 +67,15 @@ decision is cheap (rule/heuristic on flag severity + context size).
 - Re-measure hot-path p99 **under LLM load** — it must not move. If it does, the LLM is
   leaking into the hot path; fix the async boundary.
 
-## 6. First run (once Milestone 0+ exists)
+## 6. First run
 
 ```bash
-make stream       # broker + synthetic stream
-make score        # scoring workers
-make dashboard    # real-time UI
-make test         # pytest (includes crash-recovery + feature-parity tests)
+make summary      # ✅ M0 — ground-truth breakdown of the labeled stream
+make stream       # ✅ M0 — labeled JSONL on stdout
+make drift        # ✅ M0 — the M5 fixture: shifted baseline, zero incidents
+make test         # ✅ M0 — 36 tests
+make score        # M2 — scoring workers
+make dashboard    # M6 — real-time UI
 ```
 
 ## 7. Troubleshooting

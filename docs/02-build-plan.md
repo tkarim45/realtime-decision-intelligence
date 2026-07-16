@@ -6,19 +6,34 @@ the next. Everything fits the M1; cluster scale-out is an optional documented cl
 
 ---
 
-## Milestone 0 — Foundations (Week 1–2)
+## Milestone 0 — Foundations ✅ DONE
 
 **Goal:** repo skeleton, env, domain chosen, a synthetic stream flowing.
 
 Steps:
-1. Pick the domain (fraud / AIOps / vitals) + the **intervention** (block/step-up,
-   remediate, alert-tier). Commit it.
-2. `personal` conda env; package layout (`broker/ features/ scoring/ reasoning/ decision/
-   ops/ dashboard/`), Makefile, pytest, ruff/black.
-3. Build a **synthetic stream generator** with labeled events (normal + the anomaly types
-   you'll detect) — you need ground truth to score everything.
+1. ✅ Domain committed: **AIOps / service reliability**; intervention = remediation
+   (`restart` / `failover` / `scale_out` / `rollback` / `none`). See `docs/04-domain.md`.
+2. ✅ `personal` conda env; `src/rdi/` package (subsystems land as milestones complete —
+   no empty placeholder packages), Makefile, pytest, ruff, hatchling. **No black** — every
+   sibling repo here is hand-formatted compact and black would reformat all 18 of their
+   source files; `make lint` enforces line length + import order instead.
+3. ✅ **Synthetic stream generator** (`src/rdi/events.py`): six services × one tick/sec,
+   four incident types with distinct multi-metric fingerprints, a log line per event, and
+   two separate ground-truth fields (`incident_type` = what's happening, `label` = SLO
+   breach). Label is derived from the SLO, not painted on.
 
-**Artifact:** `make stream` emits a labeled synthetic event stream to stdout.
+**Artifact:** ✅ `make stream` emits labeled JSONL; `make summary` prints the ground-truth
+breakdown; `make drift` emits the M5 fixture. 36 tests, ruff clean.
+
+**Carried forward — two things M0 established that later milestones must respect:**
+- **Anomaly ≠ incident.** `incident_type` and `label` are deliberately non-redundant
+  (absorbed spikes and pre-breach leaks are label=0). M4's honest question ("does the causal
+  policy beat a naive risk threshold?") is only answerable because of this.
+- **A PSI confound, found by a failing test.** The clean stream's *mean* latency is higher
+  than the drifted stream's — a few big incident spikes outweigh a fleet-wide 1.8× baseline
+  shift. So naive PSI against a training reference reads **incidents as drift**. M5 must
+  exclude incident ticks from the reference or use a window that outlasts an episode.
+  Pinned by `test_incidents_inflate_clean_mean_above_drifted_mean`.
 
 ---
 
@@ -97,8 +112,12 @@ peeking-safe.
 
 Steps:
 1. **PSI drift monitor** (from-scratch, reuse `realtime-ml-pipeline`) on the live stream.
+   ⚠️ **M0 proved naive PSI fails here**: incident spikes move the mean more than the
+   fleet-wide baseline shift does, so PSI-vs-training-reference fires on incidents, not
+   drift. Exclude incident ticks from the reference or window past an episode — and keep
+   `test_incidents_inflate_clean_mean_above_drifted_mean` green.
 2. **Drift test**: run a clean stream (no alert) and a deliberately-drifted stream (alert
-   fires) — prove specificity.
+   fires) — prove specificity. `make drift` is the fixture (zero incidents injected).
 3. **Retrain trigger** on drift → **canary** (small % of traffic) + **shadow** (score, don't
    act) → **instant rollback** on canary regression.
 4. **Load shedding** (429 + Retry-After) under burst; request tracing; metrics endpoint.
@@ -132,7 +151,7 @@ broker.
 
 ## Milestone checklist
 
-- [ ] M0 Foundations — synthetic labeled stream
+- [x] **M0 Foundations — AIOps domain committed + labeled synthetic stream (36 tests)**
 - [ ] M1 Ingestion — 0-loss crash recovery + train=serve parity
 - [ ] M2 Scoring — p99 SLO + conformal coverage
 - [ ] M3 Reasoning — grounded explanation + remediation, hot path unaffected

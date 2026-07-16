@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "realtime-decision-intelligence"
+version = "0.1.0"
+description = "Real-time AIOps decision intelligence — durable stream, multi-model scoring with conformal uncertainty, LLM explain/remediate on the slow path, causal uplift interventions, drift monitoring"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Taimour Abdul Karim", email = "taimour.a.karim@gmail.com" }]
+keywords = ["aiops", "streaming", "real-time", "conformal-prediction", "uplift-modeling", "causal-inference", "drift-detection", "llm-agent", "mlops"]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+rdi-stream = "rdi.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rdi"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# No black / ruff-format: every sibling repo in this directory is hand-formatted compact
+# (black would reformat all 18 of their source files). Matching the neighbors beats importing
+# a formatter that fights them. `make lint` enforces the line length and the import order.
