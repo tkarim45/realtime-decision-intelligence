@@ -1,9 +1,9 @@
-"""Tests for the hot-path classifier — M2's scoring claim.
+"""Tests for the hot-path classifier.
 
 The most valuable tests here are the ones guarding against fake tasks:
 `test_label_is_not_a_learnable_target` (predicting the SLO breach is an if-statement) and
 `test_random_split_inflates_the_score` (an episode's own neighbours leaking into test).
-Both are traps this milestone actually fell into before they were pinned.
+Both are traps this code actually fell into before they were pinned.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_dataset_covers_every_class(data):
 
 
 def test_warmup_ticks_are_dropped(data):
-    """Cold-start ratios are all exactly 1.0 — an artifact, not data."""
+    """Cold-start ratios are all exactly 1.0, an artifact, not data."""
     _, _, ts = data
     assert ts.min() >= WARMUP_TICKS
 
@@ -73,7 +73,7 @@ def test_temporal_split_trains_on_the_past_only(data):
 def test_temporal_split_raises_when_a_class_lands_on_one_side_only():
     """A plain time cut can leave a whole class out of a side, and then macro-F1 is silently a
     subset average. Measured at the sparse default: incidents are rare episodes, so this is
-    the normal case rather than an edge one — hence a raise, not a warning."""
+    the normal case rather than an edge one, hence a raise, not a warning."""
     X, y, ts = build_dataset(generate(n_ticks=3000, seed=7))
     with pytest.raises(ValueError, match="absent from (train|test)"):
         temporal_split(X, y, ts)
@@ -91,7 +91,7 @@ def test_random_split_inflates_the_score(data):
     model on ticks whose neighbours it memorized.
 
     Worth noting *why* this test is possible: on the earlier over-clean generator the honest
-    score was already 0.97, and the leak was worth only +0.02 — invisible. A leak only shows
+    score was already 0.97, and the leak was worth only +0.02, invisible. A leak only shows
     up where there is headroom for it.
     """
     X, y, ts = data
@@ -105,7 +105,7 @@ def test_random_split_inflates_the_score(data):
 
 def test_beats_the_majority_baseline(fitted):
     """`normal` is ~85% of ticks. Predicting it always scores 0.85 accuracy and 0.18 macro-F1
-    while missing every incident — which is why macro-F1 is the metric."""
+    while missing every incident, which is why macro-F1 is the metric."""
     model, Xte, yte = fitted
     assert evaluate(model, Xte, yte)["macro_f1"] > 0.6
 
@@ -114,12 +114,12 @@ def test_every_class_is_actually_detected(fitted):
     """A macro average can hide a class scoring zero."""
     model, Xte, yte = fitted
     for cls, s in evaluate(model, Xte, yte)["per_class"].items():
-        assert s["recall"] > 0.2, f"{cls} recall {s['recall']:.2f} — effectively undetected"
+        assert s["recall"] > 0.2, f"{cls} recall {s['recall']:.2f}, effectively undetected"
 
 
 def test_dependency_failure_is_the_hard_class(fitted):
-    """Pins the honest weakness. A retry storm drives CPU, latency and errors up together —
-    a bad deploy's exact shape — and benign deploys ship often enough that one recently
+    """Pins the honest weakness. A retry storm drives CPU, latency and errors up together ,
+    a bad deploy's exact shape, and benign deploys ship often enough that one recently
     landed. If this ever becomes easy, check the generator got less realistic rather than
     the model getting smarter."""
     per = evaluate(*fitted)["per_class"]
@@ -127,13 +127,13 @@ def test_dependency_failure_is_the_hard_class(fitted):
 
 
 def test_dependency_failures_are_mistaken_for_bad_deploys(fitted):
-    """The specific confusion M3's log-reading agent exists to resolve."""
+    """The specific confusion a log-reading step would need to resolve."""
     model, Xte, yte = fitted
     res = evaluate(model, Xte, yte)
     i = res["labels"].index("dependency_failure")
     row = res["confusion"][i]
     wrong = [(res["labels"][j], v) for j, v in enumerate(row) if j != i and v > 0]
-    assert wrong, "dependency_failure is perfectly classified — generator too clean?"
+    assert wrong, "dependency_failure is perfectly classified, generator too clean?"
     assert max(wrong, key=lambda kv: kv[1])[0] == "bad_deploy"
 
 

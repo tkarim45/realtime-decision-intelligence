@@ -1,13 +1,13 @@
-"""The stream consumer — claim a batch, compute features, ack.
+"""The stream consumer, claim a batch, compute features, ack.
 
 Ack-AFTER-processing is the entire at-least-once guarantee. If the consumer dies mid-batch,
 the unacked events are still in the broker's pending set and get redelivered to whoever picks
 up next, so nothing is lost. Ack-before-processing would be faster and would silently drop
-every event in flight at the moment of the crash — which is the bug this ordering exists to
+every event in flight at the moment of the crash, which is the bug this ordering exists to
 not have. The trade is duplicates on redelivery, which are countable and deduped by offset.
 
-There is no model here yet: M1 proves the stream is durable and the features are train=serve.
-Scoring arrives in M2 and slots in where `_process` computes features.
+No model here. This proves the stream is durable and the features are train=serve; scoring
+slots in where `_process` computes features.
 """
 from __future__ import annotations
 

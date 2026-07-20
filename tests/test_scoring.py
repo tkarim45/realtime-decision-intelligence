@@ -1,4 +1,4 @@
-"""Tests for the assembled hot path — M2's latency claim.
+"""Tests for the assembled hot path and its latency budget.
 
 The interesting one is `test_near_line_detector_inflates_hot_path_tail_when_co_located`: it
 pins a result that says "don't count it" is not latency isolation.
@@ -121,14 +121,14 @@ def test_hot_path_latency_has_not_catastrophically_regressed(stream, fitted):
     The real numbers come from `make loadtest`, which runs in a clean process; measured there,
     p50 is ~0.36ms and p99 ~0.63ms. Asserting those here would be dishonest: inside a suite
     that has just trained several models, timings drift by more than the quantity being
-    claimed — an earlier version of this test asserted p99 < 2ms and failed at 2.83ms purely
+    claimed, an earlier version of this test asserted p99 < 2ms and failed at 2.83ms purely
     from contention. So the bound is deliberately an order of magnitude loose. It still
     catches the thing worth catching: someone putting a per-row model call back on the path
     (which cost 5ms/event and would blow this).
     """
     model, _, q = fitted
     p = latency_profile(HotPathScorer(model, q), stream, warmup=200)
-    assert p["p50_ms"] < 5.0, f"p50 {p['p50_ms']:.2f}ms — something heavy is on the hot path"
+    assert p["p50_ms"] < 5.0, f"p50 {p['p50_ms']:.2f}ms, something heavy is on the hot path"
     assert p["throughput_eps"] > 100
 
 
@@ -137,8 +137,8 @@ def test_co_locating_the_detector_does_not_change_results(stream, fitted):
 
     The *latency* cost of co-location is deliberately not asserted here. Measured in a clean
     process it is real and large (p99 0.633ms -> 1.525ms, max 2.89ms -> 20.52ms, from work
-    that is not even being counted). Measured inside this suite it does not reproduce — noise
-    flips the sign — so it lives in `make loadtest` and the docs rather than in an assertion
+    that is not even being counted). Measured inside this suite it does not reproduce, noise
+    flips the sign, so it lives in `make loadtest` and the docs rather than in an assertion
     that would flake. See rdi/scoring.py for the numbers and the reasoning.
     """
     model, detector, q = fitted

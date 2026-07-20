@@ -1,6 +1,6 @@
-"""`rdi-stream` — emit the labeled synthetic AIOps stream as JSONL on stdout.
+"""`rdi-stream`, emit the labeled synthetic AIOps stream as JSONL on stdout.
 
-Milestone 0's artifact. Downstream milestones pipe this into the broker; for now it exists so
+Downstream consumers pipe this into the broker. It also exists so
 the stream is inspectable by eye and by `jq` before anything consumes it.
 
     rdi-stream --n 600 --summary        # ground-truth breakdown, no JSONL
@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         for e in events:
             sys.stdout.write(json.dumps(e, separators=(",", ":")) + "\n")
     except BrokenPipeError:
-        # `rdi-stream | head` closes the pipe early — that's the documented usage, not a
+        # `rdi-stream | head` closes the pipe early, that's the documented usage, not a
         # failure. Retarget stdout to devnull so the interpreter's flush-on-exit can't
         # re-raise into a nonzero exit and a stack trace.
         devnull = os.open(os.devnull, os.O_WRONLY)

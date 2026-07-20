@@ -1,13 +1,13 @@
-"""The hot path — one event in, one decision out, under a sub-millisecond budget.
+"""The hot path, one event in, one decision out, under a sub-millisecond budget.
 
 Online features -> classifier -> conformal set -> a routing decision. This is what the stream
 consumer calls per event, so every line in `score` is on the latency budget.
 
 WHAT COMES OUT, and why it is not just a label:
 
-    incident      the argmax class — what to remediate, if we act
+    incident      the argmax class, what to remediate, if we act
     conformal_set the coverage-guaranteed set of plausible classes
-    action        act | escalate — the only field the rest of the system reads
+    action        act | escalate, the only field the rest of the system reads
 
 `action` is `escalate` when the conformal set is not a singleton, i.e. the model itself
 hesitates. Everything else is `act`.
@@ -22,11 +22,11 @@ It was on this path first. Measured per-component cost:
 sklearn's per-call dispatch dominates: the same IsolationForest costs 0.0284ms/event at batch
 256, so single-row scoring is ~176x more expensive per event than batched. It scales with tree
 count (25 trees 0.73ms, 200 trees 5.1ms), which is the signature of per-tree Python overhead
-rather than real compute. (The sibling `model-serving` repo measured the same effect from the
-other side: micro-batching bought it 8.0x throughput.)
+rather than real compute. (The same effect seen from the other side: micro-batching
+buys large throughput gains for exactly this reason.)
 
 Paying 5ms per event for it would blow a sub-ms SLO by 7x. And what it buys per event is weak
-anyway — M2 measured that it rescues under a quarter of the classifier's misses and that
+anyway. Measured, it rescues under a quarter of the classifier's misses, and
 "classifier says normal, detector disagrees" carries no signal above the base rate. So the
 detector moved to `NearLineDetector`: same broker, its own consumer group, batched inference
 at ~0.03ms/event. It still catches the unknown-unknowns it is there for (~77% of an incident
@@ -36,7 +36,7 @@ This is the architecture's own thesis applied one layer down. The docs always sa
 must stay off the hot path; measurement said the anomaly detector must too, for exactly the
 same reason.
 
-AND MOVING IT OFF THE PATH IS NOT ENOUGH — IT HAS TO LEAVE THE THREAD. Running the batched
+AND MOVING IT OFF THE PATH IS NOT ENOUGH. IT HAS TO LEAVE THE THREAD. Running the batched
 detector in the same loop, with its cost explicitly excluded from the timing, still degrades
 the hot path:
 
@@ -45,15 +45,15 @@ the hot path:
 
 p99 inflates 2.4x and the tail 7x from work that is not being counted, because a 7ms batched
 tree walk every 256 events evicts cache and churns the allocator under the next few events.
-(It is not GC — disabling the collector does not help.) The near-line consumer is a separate
+(It is not GC, disabling the collector does not help.) The near-line consumer is a separate
 consumer group by design, so in production it belongs in a separate process. "Don't count it"
 is not latency isolation; only separation is.
 
 An honest caveat, pinned in tests: escalation does NOT catch the confusion that matters most.
 When the model misreads a dependency failure as a bad deploy it does so at ~0.97 probability,
 so the set stays a confident singleton and the event routes to `act`. Escalation covers
-hesitation, not confident error. Resolving that needs the log line — M3's job, not the hot
-path's.
+hesitation, not confident error. Resolving that needs the log line, which is not the hot
+path's job.
 
 NO LLM HERE, EVER. Anything that blocks on a network call belongs on the slow path or the
 throughput number below is fiction.
@@ -82,7 +82,7 @@ class Decision:
 
 
 class HotPathScorer:
-    """Stateful per-event scorer. One instance per consumer — it owns the feature windows."""
+    """Stateful per-event scorer. One instance per consumer, it owns the feature windows."""
 
     def __init__(self, model, q: float, features: OnlineFeatures | None = None) -> None:
         self.model = model
@@ -108,7 +108,7 @@ class NearLineDetector:
     """The anomaly detector, off the hot path and batched.
 
     Accumulates feature vectors and scores them in one call when the buffer fills. At batch
-    256 this costs ~0.03ms/event against ~5ms/event single-row — the entire reason it is not
+    256 this costs ~0.03ms/event against ~5ms/event single-row, the entire reason it is not
     inline. `flush` drains a partial buffer so a quiet stream still gets scored.
     """
 
@@ -136,7 +136,7 @@ def fit_hot_path(X, y, ts, alpha: float = 0.05, seed: int = 0):
     """Train every hot-path component on a train/calibrate split, in time order.
 
     Raises if calibration holds a class training never saw. Incidents are sparse episodes, so
-    a three-way time cut drops a class fairly easily — and the failure is silent-by-default:
+    a three-way time cut drops a class fairly easily, and the failure is silent-by-default:
     the class has no column in `predict_proba`, so its nonconformity cannot be computed and
     q̂ would quietly be fitted on a subset, breaking the very guarantee conformal exists to
     provide. Same reasoning as `model.temporal_split`: raise rather than mis-score.
@@ -174,7 +174,7 @@ def latency_profile(scorer: HotPathScorer, events: list[dict], warmup: int = 500
     for e in events[warmup:]:
         t0 = time.perf_counter()
         d = scorer.score(e)
-        lat.append((time.perf_counter() - t0) * 1000.0)  # hot path only — see below
+        lat.append((time.perf_counter() - t0) * 1000.0)  # hot path only, see below
         actions[d.action] += 1
         if detector is not None:
             # Off the measured hot path on purpose: this is a different consumer group in the

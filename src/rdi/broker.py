@@ -1,25 +1,25 @@
-"""Durable event log with consumer groups — Redis-Streams semantics, file-backed.
+"""Durable event log with consumer groups. Redis-Streams semantics, file-backed.
 
-Adapted from the broker in the sibling `realtime-ml-pipeline` repo. Same five-method contract
+Same five-method contract as Redis Streams
 (the exact shape of Redis XADD/XREADGROUP/XACK/XAUTOCLAIM), so swapping in real Redis is one
-adapter — but implemented on a local append-only log, which is what makes at-least-once
+adapter, but implemented on a local append-only log, which is what makes at-least-once
 delivery *provable* on a laptop instead of merely claimed.
 
-  append(event)                  — durable write (JSONL), monotonic offsets
-  claim(group, consumer, n)      — deliver up to n unacked events; they enter the group's
+  append(event), durable write (JSONL), monotonic offsets
+  claim(group, consumer, n), deliver up to n unacked events; they enter the group's
                                    PENDING set (the in-flight ledger)
-  ack(group, offset)             — remove from PENDING; the event is done
-  redeliver(group, older_than_s) — re-queue pending entries whose consumer went quiet
+  ack(group, offset), remove from PENDING; the event is done
+  redeliver(group, older_than_s), re-queue pending entries whose consumer went quiet
                                    (crashed before ack) → AT-LEAST-ONCE
-  lag(group)                     — backlog + in-flight depth
+  lag(group), backlog + in-flight depth
 
-Two changes from the sibling, both because M2 has to measure throughput against an SLO and
-M1's durability claim has to survive a real kill:
+Two changes from that version, both because throughput is measured against an SLO here and
+the durability claim has to survive a real kill:
 
-  * The file handle stays open. Reopening per append made the sibling's write path an
-    open/write/close syscall trio per event, which would put a floor under M2's throughput
+  * The file handle stays open. Reopening per append made the write path an
+    open/write/close syscall trio per event, which would put a floor under throughput
     that has nothing to do with the model.
-  * `fsync=True` is a real option. The sibling's docstring said "fsync-able" but never
+  * `fsync=True` is a real option. The original said "fsync-able" but never
     called it, so a power-cut would have lost the page cache. Off by default (it costs ~an
     order of magnitude); on for the durability test, which is the one place the claim is
     actually being made.
@@ -51,7 +51,7 @@ class Broker:
         if os.path.exists(path):
             with open(path) as f:
                 self._events = [json.loads(line) for line in f if line.strip()]
-        # Deliberately long-lived, released by close()/__exit__ — a context manager here would
+        # Deliberately long-lived, released by close()/__exit__, a context manager here would
         # mean reopening per append, which is the syscall cost this class exists to avoid.
         self._fh = open(path, "a")  # noqa: SIM115
 
@@ -98,7 +98,7 @@ class Broker:
 
     def redeliver(self, group: str, consumer: str, older_than_s: float = 1.0,
                   n: int = 10) -> list[dict]:
-        """Claim pending entries stuck longer than older_than_s — their consumer died."""
+        """Claim pending entries stuck longer than older_than_s, their consumer died."""
         now = time.monotonic()
         with self._lock:
             g = self._group(group)

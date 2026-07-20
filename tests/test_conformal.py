@@ -1,4 +1,4 @@
-"""Tests for split-conformal sets — M2's calibrated-uncertainty claim.
+"""Tests for split-conformal prediction sets.
 
 Two things get pinned here, and the second one is a prediction that FAILED:
 
@@ -64,7 +64,7 @@ def test_qhat_rises_as_alpha_falls(calibrated):
 
 def test_naive_softmax_cannot_be_dialled(calibrated):
     """The counterexample. Thresholding the softmax barely moves with alpha, so its coverage
-    plateaus near the model's accuracy — it cannot deliver a chosen guarantee."""
+    plateaus near the model's accuracy, it cannot deliver a chosen guarantee."""
     covs = [coverage(naive_sets(calibrated["p_test"], a, calibrated["classes"]),
                      calibrated["y_test"])["coverage"] for a in (0.10, 0.05, 0.01)]
     assert max(covs) - min(covs) < 0.02, "naive coverage responds to alpha after all"
@@ -74,13 +74,13 @@ def test_naive_softmax_cannot_be_dialled(calibrated):
 # ---- the prediction that failed ----
 
 def test_conformal_cannot_hedge_a_confidently_wrong_model(calibrated):
-    """The build plan predicted conformal would express the dependency_failure/bad_deploy
-    ambiguity, so an ambiguous set could route the event to M3 instead of auto-remediating.
+    """The design expected conformal to express the dependency_failure/bad_deploy ambiguity,
+    so an ambiguous set could route the event for review instead of auto-remediating.
     It does not, and the reason matters.
 
     When the model misreads a dependency failure as a bad deploy it assigns the wrong class
     ~0.97 probability and the right one ~0.02. It is not uncertain, it is wrong. Conformal
-    can only widen a set the model already hesitates on — it cannot manufacture doubt. At a
+    can only widen a set the model already hesitates on, it cannot manufacture doubt. At a
     95% target barely any dependency_failure set contains both classes.
     """
     c = calibrated
@@ -91,19 +91,19 @@ def test_conformal_cannot_hedge_a_confidently_wrong_model(calibrated):
 
     bad_i = c["classes"].index("bad_deploy")
     dep_i = c["classes"].index("dependency_failure")
-    assert c["p_test"][misread, bad_i].mean() > 0.8, "not confidently wrong — story changed"
+    assert c["p_test"][misread, bad_i].mean() > 0.8, "not confidently wrong, story changed"
     assert c["p_test"][misread, dep_i].mean() < 0.2
 
     both = {"bad_deploy", "dependency_failure"}
     hedged = sum(1 for s, t in zip(_sets(c, 0.05), c["y_test"], strict=True)
                  if t == "dependency_failure" and both <= s)
-    assert hedged / dep.sum() < 0.10, "conformal now hedges the confusion — re-verify"
+    assert hedged / dep.sum() < 0.10, "conformal now hedges the confusion, re-verify"
 
 
 def test_expressing_that_ambiguity_costs_the_whole_stream(calibrated):
     """Why you cannot simply demand a tighter alpha to recover the hedge.
 
-    At 99% the sets do start containing both classes — and ~40% of ALL events become
+    At 99% the sets do start containing both classes, and ~40% of ALL events become
     ambiguous, so 'escalate on an ambiguous set' would escalate a third of the stream to an
     LLM. The uncertainty layer cannot be the routing signal for this confusion at any usable
     operating point.

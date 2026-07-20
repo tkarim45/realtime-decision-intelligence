@@ -1,10 +1,10 @@
-"""Tests for online features — M1's train=serve claim.
+"""Tests for online features and the train=serve guarantee.
 
 Three groups, in order of what they're worth:
 
-  1. parity      — the offline path and the streaming path produce identical vectors
-  2. no-lookahead — every feature at event i depends only on events <= i
-  3. fingerprints — each feature actually discriminates the incident it was added for
+  1. parity, the offline path and the streaming path produce identical vectors
+  2. no-lookahead, every feature at event i depends only on events <= i
+  3. fingerprints, each feature actually discriminates the incident it was added for
 
 (1) alone is nearly a tautology, since compute_offline replays the online code on purpose.
 It is here to fail loudly if someone later "optimizes" the training path into a second
@@ -113,7 +113,7 @@ def test_batch_size_does_not_change_features(tmp_path, events):
 def test_truncating_the_future_does_not_change_the_past(events):
     """Causality, stated as a property: features for the first k events must be bit-identical
     whether or not the rest of the stream exists. Any implementation that normalizes against
-    a full-series statistic fails this — see the leaky counterexample below."""
+    a full-series statistic fails this, see the leaky counterexample below."""
     ordered = sorted(events, key=lambda e: e["ts"])
     k = len(ordered) // 3
     np.testing.assert_allclose(
@@ -164,11 +164,11 @@ def test_a_sustained_outage_does_not_normalize_itself_away():
     col = F["latency_over_baseline"]
     first, last = m[300, col], m[-1, col]
     assert first == pytest.approx(3.0, rel=0.05), "outage not visible at onset"
-    assert last > 2.5, f"outage decayed to {last:.2f}x — baseline ate the incident"
+    assert last > 2.5, f"outage decayed to {last:.2f}x, baseline ate the incident"
 
 
 def test_baseline_survives_a_long_memory_leak(events):
-    """memory_leak runs up to 300 ticks — the longest episode, so the worst poisoning case."""
+    """memory_leak runs up to 300 ticks, the longest episode, so the worst poisoning case."""
     m = compute_offline(events)
     leak = _rows_for(events, m, "memory_leak")
     late = leak[len(leak) // 2:][:, F["latency_over_baseline"]]
@@ -176,11 +176,11 @@ def test_baseline_survives_a_long_memory_leak(events):
 
 
 def test_feature_extraction_stays_inside_the_hot_path_budget():
-    """M2's hot path has a sub-ms SLO and the model still has to fit inside it.
+    """The hot path has a sub-ms SLO and the model still has to fit inside it.
 
     The median baseline is O(window) per metric per event, which is a real cost worth guarding:
     measured p99 is ~0.3ms at a steady-state 901-deep window. The threshold here is deliberately
-    loose — this is a guard against a catastrophic regression (an accidental sort, a window that
+    loose, this is a guard against a catastrophic regression (an accidental sort, a window that
     stops evicting), not a benchmark. A tight bound would just flake on a busy laptop.
     """
     events = generate(n_ticks=350, seed=5)
@@ -195,7 +195,7 @@ def test_feature_extraction_stays_inside_the_hot_path_budget():
         f.update_and_extract(e)
         lat.append((time.perf_counter() - t0) * 1000)
 
-    assert np.percentile(lat, 99) < 2.0, f"p99 {np.percentile(lat, 99):.2f}ms — hot path at risk"
+    assert np.percentile(lat, 99) < 2.0, f"p99 {np.percentile(lat, 99):.2f}ms, hot path at risk"
 
 
 def test_baseline_window_stops_growing_at_steady_state():
@@ -220,11 +220,11 @@ def test_baseline_window_ages_out_old_events():
 # ---- the leaky counterexample, quantified ----
 
 def test_leaky_offline_features_diverge_from_online(events):
-    """The skew the sibling `feature-store` repo exists to demonstrate, in feature space.
+    """The classic feature-store skew, in feature space.
 
     A per-service mean over the whole series is what you get by building training features in
     pandas and serving features in a stream worker. It is unavailable at serving time and it
-    disagrees with the online path — so a model trained on it is trained on inputs that will
+    disagrees with the online path, so a model trained on it is trained on inputs that will
     never exist in production.
     """
     online = compute_offline(events)
@@ -234,7 +234,7 @@ def test_leaky_offline_features_diverge_from_online(events):
 
 
 def test_leaky_baseline_understates_incidents_worst_where_it_matters(events):
-    """The damage is not uniform — it is concentrated on the events that matter.
+    """The damage is not uniform, it is concentrated on the events that matter.
 
     A service's whole-series mean latency includes its own outages, so an outage is scored
     against an inflated 'normal' and reads MILDER than it truly is. The feature is least
@@ -270,7 +270,7 @@ def test_memory_leak_shows_a_positive_memory_slope(events):
 def test_dependency_failure_cpu_is_bimodal_not_uniformly_low(events):
     """CPU is NOT the clean discriminator the domain doc first claimed.
 
-    Blocked threads push CPU down, but clients retry and retries burn CPU — so ~a third of
+    Blocked threads push CPU down, but clients retry and retries burn CPU, so ~a third of
     dependency-failure ticks run CPU *above* baseline. The distribution is bimodal, and its
     mean (~0.9) therefore describes no actual tick. The earlier version of this test asserted
     `mean < 0.9` and passed on an average that misrepresented a third of the data.
@@ -279,7 +279,7 @@ def test_dependency_failure_cpu_is_bimodal_not_uniformly_low(events):
     dep = _rows_for(events, m, "dependency_failure")[:, F["cpu_over_baseline"]]
     below, above = float((dep < 1.0).mean()), float((dep > 1.0).mean())
     assert below > 0.4, f"only {below:.0%} of dep ticks run CPU below baseline"
-    assert above > 0.15, f"only {above:.0%} run CPU above baseline — retry storms missing"
+    assert above > 0.15, f"only {above:.0%} run CPU above baseline, retry storms missing"
 
 
 def test_dependency_failure_still_blows_latency(events):
@@ -300,14 +300,14 @@ def test_rps_not_cpu_is_what_separates_the_two_high_latency_incidents(events):
     apart once retry storms exist.
 
     Not CPU: the ranges overlap, so no threshold on it separates the classes.
-    It is `rps_over_baseline` — a traffic spike genuinely has traffic and a failing
+    It is `rps_over_baseline`, a traffic spike genuinely has traffic and a failing
     dependency does not. Boring, and true.
     """
     m = compute_offline(events)
     dep_cpu = _rows_for(events, m, "dependency_failure")[:, F["cpu_over_baseline"]]
     spike_cpu = _rows_for(events, m, "traffic_spike")[:, F["cpu_over_baseline"]]
     assert max(dep_cpu.min(), spike_cpu.min()) <= min(dep_cpu.max(), spike_cpu.max()), \
-        "CPU ranges no longer overlap — the retry storms that make this realistic are gone"
+        "CPU ranges no longer overlap, the retry storms that make this realistic are gone"
 
     dep_rps = _rows_for(events, m, "dependency_failure")[:, F["rps_over_baseline"]]
     spike_rps = _rows_for(events, m, "traffic_spike")[:, F["rps_over_baseline"]]
@@ -323,7 +323,7 @@ def test_bad_deploy_is_recent_after_a_deploy(events):
 
 
 def test_no_deploy_seen_yields_the_sentinel_not_a_false_signal():
-    """First sighting is not a deploy — we started watching, we didn't witness one. Stamping
+    """First sighting is not a deploy, we started watching, we didn't witness one. Stamping
     it would fire a bad_deploy signal for every service at t=0."""
     f = OnlineFeatures()
     for i in range(10):

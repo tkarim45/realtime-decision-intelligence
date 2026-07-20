@@ -1,4 +1,4 @@
-"""Online windowed features — one implementation, used both offline and online.
+"""Online windowed features, one implementation, used both offline and online.
 
 The model never sees a raw tick; it sees how this service is behaving *relative to its own
 recent normal*. A 400ms latency is fine for a service that always runs at 380ms and a fire for
@@ -7,25 +7,25 @@ baseline rather than an absolute.
 
 Each feature earns its place by discriminating an incident type (docs/04-domain.md):
 
-  latency_over_baseline   — how bad, relative to this service's normal
-  latency_ms              — absolute; the SLO is absolute, so the model needs the raw value
-  error_rate              — absolute, same reason
-  cpu_over_baseline       — THE discriminator: dependency_failure runs CPU *down* (threads
+  latency_over_baseline, how bad, relative to this service's normal
+  latency_ms, absolute; the SLO is absolute, so the model needs the raw value
+  error_rate, absolute, same reason
+  cpu_over_baseline. THE discriminator: dependency_failure runs CPU *down* (threads
                             blocked on I/O) while traffic_spike runs it up. Both blow latency;
                             only this separates the opposite remediations they demand.
-  mem_pct                 — absolute level
-  mem_slope_per_min       — memory_leak's monotonic ramp; the one incident with a slow onset
-  rps_over_baseline       — traffic_spike's signature
-  since_deploy_s          — bad_deploy: a step change right after a version lands
+  mem_pct, absolute level
+  mem_slope_per_min, memory_leak's monotonic ramp; the one incident with a slow onset
+  rps_over_baseline, traffic_spike's signature
+  since_deploy_s, bad_deploy: a step change right after a version lands
 
-TRAIN=SERVE. `compute_offline` does not reimplement any of this — it replays events through
+TRAIN=SERVE. `compute_offline` does not reimplement any of this, it replays events through
 the very same OnlineFeatures object. That is the point, not a shortcut: two implementations
 that must agree is a bug waiting to happen, and the skew it produces is exactly what the
-sibling `feature-store` repo exists to demonstrate (a naive join scored 1.00 offline and 0.61
+classic feature-store failure (a naive join scored 1.00 offline and 0.61
 in production). See `compute_offline_leaky` for what the tempting version does instead.
 
 NO LOOKAHEAD. Every feature at event i depends only on events <= i. Baselines are computed
-from *prior* events, before the current one is folded into the window — otherwise an incident
+from *prior* events, before the current one is folded into the window, otherwise an incident
 would contribute to the baseline it is supposed to stand out against, and a big enough spike
 would normalize itself away.
 """
@@ -50,7 +50,7 @@ FEATURE_NAMES = [
 # capping keeps the feature bounded for the model instead of letting it drift to +inf.
 NO_DEPLOY_S = 3600.0
 
-# Long enough that the longest incident (memory_leak, up to 300 ticks — docs/04-domain.md) is
+# Long enough that the longest incident (memory_leak, up to 300 ticks, docs/04-domain.md) is
 # a minority of the window, which is what keeps the median baseline uncontaminated. Also spans
 # one full diurnal cycle (_DIURNAL_PERIOD_S = 900), so the baseline reflects a whole traffic
 # cycle rather than whichever phase we happen to be in.
@@ -82,19 +82,19 @@ class OnlineFeatures:
             dq.popleft()
 
     def _baseline(self, dq: deque, fallback: float) -> float:
-        """MEDIAN over PRIOR events in the window — deliberately not the mean.
+        """MEDIAN over PRIOR events in the window, deliberately not the mean.
 
         A rolling mean is poisoned by the very incident it is meant to measure against: over a
         sustained outage the baseline climbs to meet the outage, `latency_over_baseline` decays
         toward 1.0, and the feature goes blind exactly when things are worst. Measured on a
-        real episode, a 3.0x outage read as 1.13x by its end — 89% of the signal gone. Since
+        real episode, a 3.0x outage read as 1.13x by its end, 89% of the signal gone. Since
         incidents run 40-300 ticks inside a 900s window they stay a minority of it, and a
         median tolerates up to 50% contamination where a mean tolerates none.
 
         Median over a low quantile: p25 would also resist poisoning, but the diurnal traffic
         cycle would bias it low, so a perfectly healthy service would read ~1.3x baseline.
 
-        Empty on a service's first tick, where the only honest baseline is the current value —
+        Empty on a service's first tick, where the only honest baseline is the current value ,
         which yields a ratio of exactly 1.0.
         """
         return float(np.median([v for _, v in dq])) if dq else fallback
@@ -130,7 +130,7 @@ class OnlineFeatures:
         hist["rps"].append((ts, event["rps"]))
         mem.append((ts, event["mem_pct"]))
 
-        # Slope includes the current event — that's still causal (i <= i) and it's what makes
+        # Slope includes the current event, that's still causal (i <= i) and it's what makes
         # the ramp visible while it's happening rather than a window later.
         mem_slope = 0.0
         if len(mem) >= 2:
@@ -151,7 +151,7 @@ class OnlineFeatures:
 
 
 def compute_offline(events: list[dict], **kwargs: float) -> np.ndarray:
-    """Feature matrix for training — the ONLINE code replayed in timestamp order.
+    """Feature matrix for training, the ONLINE code replayed in timestamp order.
 
     Not a second implementation. Any speedup that stops replaying the streaming path
     reintroduces the train/serve skew this whole module exists to prevent; if this is ever
@@ -163,7 +163,7 @@ def compute_offline(events: list[dict], **kwargs: float) -> np.ndarray:
 
 
 def compute_offline_leaky(events: list[dict]) -> np.ndarray:
-    """The tempting batch implementation — a per-service mean over the WHOLE series.
+    """The tempting batch implementation, a per-service mean over the WHOLE series.
 
     Kept as a measured counterexample, not as an option: nothing imports it but the test that
     quantifies the damage. It is what you write when you build the training path in pandas and
@@ -172,7 +172,7 @@ def compute_offline_leaky(events: list[dict]) -> np.ndarray:
       1. It looks into the future. The baseline for event 0 includes event 9999.
       2. Its baseline is contaminated by the very incidents it is meant to make visible. A
          service's mean latency includes its outages, so an outage is measured against an
-         inflated normal and looks *milder than it is* — the error is worst precisely on the
+         inflated normal and looks *milder than it is*, the error is worst precisely on the
          events that matter.
 
     Offline it scores beautifully; online the baseline does not exist yet. See

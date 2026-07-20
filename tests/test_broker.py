@@ -1,4 +1,4 @@
-"""Tests for the durable log and at-least-once delivery — M1's S1 claim.
+"""Tests for the durable log and at-least-once delivery.
 
 The headline is test_crash_mid_stream_loses_zero_events. The rest exist so that when it
 passes, it passes for the documented reason rather than by accident.
@@ -80,7 +80,7 @@ def test_ack_clears_pending(log_path):
 
 
 def test_groups_are_independent(log_path):
-    """Two groups each see the whole stream — that's what makes fan-out possible."""
+    """Two groups each see the whole stream, that's what makes fan-out possible."""
     with _filled(log_path, n_ticks=10) as b:
         total = b.lag("g")["appended"]
         assert len(b.claim("scoring", "c", 10_000)) == total
@@ -97,7 +97,7 @@ def test_claim_never_delivers_the_same_offset_twice_to_a_group(log_path):
 
 def test_pending_entries_are_redelivered_when_a_consumer_goes_quiet(log_path):
     with _filled(log_path, n_ticks=10) as b:
-        b.claim("g", "dead", 4)  # claimed, never acked — the consumer died here
+        b.claim("g", "dead", 4)  # claimed, never acked, the consumer died here
         time.sleep(0.15)
         rescued = b.redeliver("g", "rescue", older_than_s=0.1, n=10)
         assert len(rescued) == 4
@@ -133,7 +133,7 @@ def test_crash_mid_stream_loses_zero_events(log_path):
         crash = Consumer("crash", b, "g", die_after=80)
         crash.run()
         assert crash.results.processed == 80, "crash consumer did not die where expected"
-        assert b.lag("g")["pending"] > 0, "nothing was in flight — the crash proved nothing"
+        assert b.lag("g")["pending"] > 0, "nothing was in flight, the crash proved nothing"
 
         time.sleep(0.25)
         rescue = Consumer("rescue", b, "g")

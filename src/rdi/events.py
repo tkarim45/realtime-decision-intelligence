@@ -3,15 +3,15 @@
 A fleet of six services emits one metric tick each per second: latency, error rate, CPU,
 memory, request rate, and a log line. Normal behavior is each service humming around its own
 baseline under a diurnal traffic curve. Into that we inject four incident types, each with a
-distinct *multi-metric* fingerprint — no single metric identifies any of them, which is the
+distinct *multi-metric* fingerprint, no single metric identifies any of them, which is the
 whole reason the scoring layer has work to do (see docs/04-domain.md).
 
 Two ground-truth fields, and they are not the same thing:
 
-  incident_type — WHAT IS HAPPENING (None when normal). The anomaly detector's target.
-  label         — SHOULD WE ACT: 1 iff this tick breaches the SLO. The decision layer's target.
+  incident_type. WHAT IS HAPPENING (None when normal). The anomaly detector's target.
+  label. SHOULD WE ACT: 1 iff this tick breaches the SLO. The decision layer's target.
 
-An absorbed traffic spike is incident_type="traffic_spike", label=0 — a real anomaly that
+An absorbed traffic spike is incident_type="traffic_spike", label=0, a real anomaly that
 costs money to remediate and doesn't need it. A memory leak's first minutes are label=0 too:
 real, not yet breaching. Collapsing the two fields would let a risk threshold masquerade as a
 causal policy and would erase the uplift engine's job.
@@ -21,7 +21,7 @@ The label is DERIVED from the emitted metrics against the SLO, never painted on:
     label = 1  iff  latency_ms > SLO_LATENCY_MS  or  error_rate > SLO_ERROR_RATE
 
 so the SLO constant *is* the ground-truth definition. A noisy normal tick can breach on its
-own — that's a blip, and it's meant to be there.
+own, that's a blip, and it's meant to be there.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ SERVICES = [
 
 INCIDENT_TYPES = ["memory_leak", "dependency_failure", "traffic_spike", "bad_deploy"]
 
-# Ground truth for Milestone 4. Deliberately NOT a field on the event — the uplift model has
+# Ground truth for evaluating a decision policy. Deliberately NOT a field on the event, a model has
 # to recover this from the metrics, and the policy has to weigh it against the cost of acting.
 REMEDIATIONS = {
     "memory_leak": "restart",
@@ -55,7 +55,7 @@ SLO_ERROR_RATE = 0.05
 
 METRIC_NAMES = ["latency_ms", "error_rate", "cpu_pct", "mem_pct", "rps"]
 
-# Upstream each service depends on — used to make dependency_failure logs concrete.
+# Upstream each service depends on, used to make dependency_failure logs concrete.
 _UPSTREAM = {
     "checkout-api": "payments-db",
     "payments-worker": "ledger-db",
@@ -65,11 +65,11 @@ _UPSTREAM = {
     "recommend-api": "feature-store",
 }
 
-_DIURNAL_PERIOD_S = 900.0  # compressed "day" — a full traffic cycle every 15 min of stream
+_DIURNAL_PERIOD_S = 900.0  # compressed "day", a full traffic cycle every 15 min of stream
 
 # Mean ticks between BENIGN deploys per service. Real fleets ship constantly and almost every
 # deploy is fine. Without these, the only version bumps in the stream would be the ones that
-# broke something, and "a deploy happened" would be a perfect bad_deploy oracle — a model would
+# broke something, and "a deploy happened" would be a perfect bad_deploy oracle, a model would
 # learn `since_deploy_s < 300 => bad_deploy` and score ~1.0 on a task that doesn't exist.
 # With them, deploy recency is necessary but not sufficient: the model has to pair it with the
 # latency/error step to tell a bad deploy from the ~80% of deploys that are uneventful.
@@ -112,7 +112,7 @@ def _schedule(rng: np.random.Generator, n_ticks: int, per_service: int) -> list[
         ep = {"kind": kind, "start": start, "end": end, "duration": duration}
         if kind == "traffic_spike":
             # ~40% of spikes are ABSORBED: the service handles the load, latency stays under
-            # SLO, label=0. Scaling out for these is a pure loss — that's the uplift signal.
+            # SLO, label=0. Scaling out for these is a pure loss, that's the uplift signal.
             ep["absorbed"] = bool(rng.random() < 0.40)
             # Down to 1.5x: a modest surge into a service already near capacity is the common
             # real spike. Only allowing 3-6x made every spike unmistakable on rps alone.
@@ -125,7 +125,7 @@ def _schedule(rng: np.random.Generator, n_ticks: int, per_service: int) -> list[
             # Widened from 0.30-0.60: upstreams degrade partially far more often than they
             # die outright, and a 0.08 partial failure overlaps a saturated spike's errors.
             ep["err"] = float(rng.uniform(0.08, 0.60))
-            # RETRY STORM. When an upstream fails, clients retry — and retries burn CPU. So
+            # RETRY STORM. When an upstream fails, clients retry, and retries burn CPU. So
             # half of dependency failures show CPU *up*, not down. This is the realism that
             # breaks cpu_over_baseline as a clean discriminator: with it, the same feature
             # that identifies a dependency failure points the opposite way half the time.
@@ -140,7 +140,7 @@ def _schedule(rng: np.random.Generator, n_ticks: int, per_service: int) -> list[
 def _benign_deploys(rng: np.random.Generator, n_ticks: int, episodes: list[dict]) -> set[int]:
     """Uneventful deploys: a version bump and nothing else.
 
-    Skipped inside a bad_deploy episode — a benign deploy landing mid-outage would bump the
+    Skipped inside a bad_deploy episode, a benign deploy landing mid-outage would bump the
     version a second time and hand the model a bogus 'deploy just happened' reset for an
     incident already in progress.
     """
@@ -160,14 +160,14 @@ def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> 
     m = dict(m)
     if kind == "memory_leak":
         # Memory climbs monotonically; latency follows quadratically (GC pressure); errors
-        # arrive LATE (cubic) — the service degrades long before it fails.
+        # arrive LATE (cubic), the service degrades long before it fails.
         m["mem_pct"] += 45.0 * p
         m["latency_ms"] *= 1.0 + 6.0 * p**2
         m["error_rate"] += 0.09 * p**3
         m["cpu_pct"] += 12.0 * p  # GC burns some CPU
     elif kind == "dependency_failure":
-        # Threads blocked on I/O: latency and errors explode. CPU goes DOWN — the service
-        # isn't working, it's waiting — UNLESS clients are retrying, and then it goes up.
+        # Threads blocked on I/O: latency and errors explode. CPU goes DOWN, the service
+        # isn't working, it's waiting. UNLESS clients are retrying, and then it goes up.
         m["latency_ms"] *= ep["magnitude"]
         m["error_rate"] = ep["err"]
         m["cpu_pct"] *= float(rng.uniform(1.5, 2.2)) if ep["retry_storm"] else 0.6
@@ -189,11 +189,11 @@ def _apply(kind: str, ep: dict, p: float, m: dict, rng: np.random.Generator) -> 
 
 def _log_line(service: str, kind: str | None, m: dict, version: str,
               rng: np.random.Generator, ep: dict | None = None) -> str:
-    """A log line per tick — the LLM agent's raw material, flavored by what's actually wrong.
+    """A log line per tick, the LLM agent's raw material, flavored by what's actually wrong.
 
     This is where the metrics' ambiguity gets resolved. A retry-storm dependency failure looks
-    like a traffic spike on CPU and error rate, but its log names the upstream and the retry —
-    so M3's agent can settle from text what the hot path cannot settle from numbers.
+    like a traffic spike on CPU and error rate, but its log names the upstream and the retry ,
+    so a log-reading step can settle from text what the hot path cannot settle from numbers.
     """
     if kind == "memory_leak":
         return (f"GC pause {int(rng.uniform(180, 900))}ms; heap at {m['mem_pct']:.0f}% of limit; "
@@ -221,7 +221,7 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
 
     drifted=True inflates fleet-wide baseline latency and shifts the request-rate
     distribution and injects NO incidents. The world changed; nothing broke. PSI must fire
-    on this stream and the incident alert must stay silent — that's the M5 specificity test.
+    on this stream and the incident alert must stay silent, that's the M5 specificity test.
     """
     rng = np.random.default_rng(seed)
     profiles = {s: _baseline_profile(rng) for s in SERVICES}
@@ -234,12 +234,12 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
         schedules = {s: [] for s in SERVICES}
     else:
         schedules = {s: _schedule(rng, n_ticks, incidents_per_service) for s in SERVICES}
-    # Deploys keep shipping on a drifted stream too — drift is not a deploy freeze.
+    # Deploys keep shipping on a drifted stream too, drift is not a deploy freeze.
     benign = {s: _benign_deploys(rng, n_ticks, schedules[s]) for s in SERVICES}
 
     events: list[dict] = []
     for tick in range(n_ticks):
-        # One diurnal curve across the whole fleet — shared traffic seasonality is exactly the
+        # One diurnal curve across the whole fleet, shared traffic seasonality is exactly the
         # confound that makes "high rps" a useless standalone incident signal.
         diurnal = 1.0 + 0.45 * np.sin(2 * np.pi * tick / _DIURNAL_PERIOD_S)
         for service in SERVICES:
@@ -280,7 +280,7 @@ def generate(n_ticks: int = 3000, seed: int = 7, drifted: bool = False,
                 "rps": round(m["rps"], 2),
                 "log": _log_line(service, kind, m, version, rng, active),
                 "incident_type": kind,
-                # Derived, not painted on — the SLO is the ground-truth definition.
+                # Derived, not painted on, the SLO is the ground-truth definition.
                 "label": int(m["latency_ms"] > SLO_LATENCY_MS or m["error_rate"] > SLO_ERROR_RATE),
             })
     return events

@@ -1,4 +1,4 @@
-"""Tests for the unsupervised detector — M2's unknown-unknowns claim.
+"""Tests for the unsupervised detector.
 
 The load-bearing test is `test_detector_flags_an_incident_type_the_classifier_never_saw`:
 without it, the detector is redundant with the classifier and should be deleted rather than
@@ -79,8 +79,8 @@ def test_scores_are_higher_on_incidents_than_on_normal(detector, split):
 def test_detector_flags_an_incident_type_the_classifier_never_saw(split):
     """Unknown-unknowns, demonstrated rather than asserted.
 
-    Hide memory_leak from both models. The classifier cannot say "I don't know" — it has no
-    such class — so it confidently spreads the leak across the labels it does have, calling
+    Hide memory_leak from both models. The classifier cannot say "I don't know", it has no
+    such class, so it confidently spreads the leak across the labels it does have, calling
     ~39% of it `normal`. The detector, which was never told what a leak is either, still finds
     ~77% of it far from healthy behaviour.
     """
@@ -113,17 +113,17 @@ def test_classifier_and_detector_are_complementary_across_classes(split):
     incidents = [c for c in per if c != "normal"]
     corr = float(np.corrcoef([per[c]["recall"] for c in incidents],
                              [rates[c]["flagged"] for c in incidents])[0, 1])
-    assert corr < 0.0, f"strengths correlate ({corr:+.2f}) — the detector adds little"
+    assert corr < 0.0, f"strengths correlate ({corr:+.2f}), the detector adds little"
 
 
 def test_detector_is_not_a_safety_net_under_classifier_misses(split):
     """The honest limit, pinned so nobody oversells the layer.
 
     Class-level complementarity does NOT imply event-level complementarity. The events the
-    classifier misses (calls `normal`) are the mild ones — an early leak ramp, a pre-breach
-    tick — and those look normal to the detector too. Measured: it catches under a quarter of
+    classifier misses (calls `normal`) are the mild ones, an early leak ramp, a pre-breach
+    tick, and those look normal to the detector too. Measured: it catches under a quarter of
     them, and "classifier says normal but detector flags" carries no signal at all (~15% of
-    such events are incidents against a ~20% base rate — worse than guessing).
+    such events are incidents against a ~20% base rate, worse than guessing).
     """
     Xtr, Xte, ytr, yte = split
     clf, det = train(Xtr, ytr), fit_on_normal(Xtr, ytr)
@@ -132,10 +132,10 @@ def test_detector_is_not_a_safety_net_under_classifier_misses(split):
     missed = (pred == "normal") & (yte != "normal")
     assert missed.sum() > 50
     assert float(flag[missed].mean()) < 0.50, \
-        "detector now rescues most misses — re-check whether the failure modes really differ"
+        "detector now rescues most misses, re-check whether the failure modes really differ"
 
     disagree = (pred == "normal") & (flag == 1)
     precision = float((yte[disagree] != "normal").mean())
     base_rate = float((yte != "normal").mean())
     assert precision < base_rate * 1.5, \
-        "disagreement now beats the base rate — it would be a usable escalation signal"
+        "disagreement now beats the base rate, it would be a usable escalation signal"

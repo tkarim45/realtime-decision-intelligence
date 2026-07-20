@@ -1,6 +1,6 @@
-"""Tests for the M0 stream generator.
+"""Tests for the stream generator.
 
-These assert the properties every downstream milestone depends on: that the labels mean what
+These assert the properties everything downstream depends on: that the labels mean what
 docs/04-domain.md says they mean, that each incident type actually carries its documented
 fingerprint (a generator that emits indistinguishable incidents would make the whole scoring
 layer a fiction), and that the drifted stream shifts without breaking.
@@ -82,7 +82,7 @@ def test_normal_ticks_almost_never_breach(stream):
     normal = [e for e in stream if e["incident_type"] is None]
     breach_rate = sum(e["label"] for e in normal) / len(normal)
     # Blips are allowed and intended; a normal stream that breaches often is a broken baseline.
-    assert breach_rate < 0.01, f"normal breach rate {breach_rate:.2%} — baseline too hot"
+    assert breach_rate < 0.01, f"normal breach rate {breach_rate:.2%}, baseline too hot"
 
 
 def test_incidents_are_a_minority_of_the_stream(stream):
@@ -101,7 +101,7 @@ def test_absorbed_traffic_spikes_exist_and_do_not_breach(stream):
     """The uplift engine's reason to exist: a real anomaly that must NOT be acted on."""
     spikes = _of_type(stream, "traffic_spike")
     unbreaching = [e for e in spikes if e["label"] == 0]
-    assert unbreaching, "no absorbed spike ticks — uplift has no negative-value case to learn"
+    assert unbreaching, "no absorbed spike ticks, uplift has no negative-value case to learn"
     assert len(unbreaching) / len(spikes) > 0.20
 
 
@@ -115,7 +115,7 @@ def test_memory_leak_has_non_breaching_early_ticks(stream):
 def test_incident_type_and_label_are_not_redundant(stream):
     """If label were just (incident_type is not None), every downstream claim collapses."""
     anomalous = [e for e in stream if e["incident_type"] is not None]
-    assert any(e["label"] == 0 for e in anomalous), "every anomaly breaches — fields redundant"
+    assert any(e["label"] == 0 for e in anomalous), "every anomaly breaches, fields redundant"
 
 
 # ---- each incident type carries its documented fingerprint ----
@@ -137,7 +137,7 @@ def test_memory_leak_memory_climbs_within_an_episode():
         if len(series) < 60:
             continue
         mem = [e["mem_pct"] for e in series]
-        # Compare episode halves rather than adjacent ticks — noise is real, the trend is the claim.
+        # Compare episode halves rather than adjacent ticks, noise is real, the trend is the claim.
         assert np.mean(mem[len(mem) // 2:]) > np.mean(mem[:len(mem) // 2])
         checked += 1
     assert checked, "no memory_leak episode long enough to test the ramp"
@@ -146,7 +146,7 @@ def test_memory_leak_memory_climbs_within_an_episode():
 def test_dependency_failure_shows_high_errors_with_flat_cpu(stream):
     """The fingerprint that separates it from traffic_spike: latency up, CPU *down*.
 
-    Both incidents blow the latency SLO. Only one has the service actually doing work — a
+    Both incidents blow the latency SLO. Only one has the service actually doing work, a
     scorer that can't tell them apart will pick the wrong remediation every time.
     """
     deps = _of_type(stream, "dependency_failure")
@@ -167,7 +167,7 @@ def test_retry_storms_make_some_dependency_failures_burn_cpu(stream):
     """Realism that costs the model its easiest discriminator.
 
     When an upstream fails, clients retry, and retries burn CPU. So a dependency failure does
-    not reliably look like an idle service waiting on I/O — a good fraction look busy, which
+    not reliably look like an idle service waiting on I/O, a good fraction look busy, which
     is exactly what a traffic spike looks like. Without this the generator handed the model a
     perfectly separable pair and the whole scoring layer scored ~1.0 on nothing.
     """
@@ -175,7 +175,7 @@ def test_retry_storms_make_some_dependency_failures_burn_cpu(stream):
     normal_cpu = _mean([e for e in stream if e["incident_type"] is None], "cpu_pct")
     busy = [e for e in dep if e["cpu_pct"] > normal_cpu]
     assert 0.15 < len(busy) / len(dep) < 0.85, \
-        f"{len(busy) / len(dep):.0%} of dependency failures burn CPU — expected a real mix"
+        f"{len(busy) / len(dep):.0%} of dependency failures burn CPU, expected a real mix"
 
 
 def _deploys(stream: list[dict]) -> list[dict]:
@@ -194,7 +194,7 @@ def _deploys(stream: list[dict]) -> list[dict]:
 def test_bad_deploy_bumps_the_version(stream):
     """The deploy marker is the causal evidence the LLM agent cites to justify rollback."""
     starts = [e for e in _deploys(stream) if e["incident_type"] == "bad_deploy"]
-    assert starts, "no bad deploy occurred — bad_deploy has no marker to explain"
+    assert starts, "no bad deploy occurred, bad_deploy has no marker to explain"
 
 
 def test_most_deploys_are_benign(stream):
@@ -205,7 +205,7 @@ def test_most_deploys_are_benign(stream):
     nothing. Deploy recency must be necessary but NOT sufficient.
     """
     deploys = _deploys(stream)
-    assert len(deploys) >= 10, f"only {len(deploys)} deploys — too few to break the oracle"
+    assert len(deploys) >= 10, f"only {len(deploys)} deploys, too few to break the oracle"
     benign = [e for e in deploys if e["incident_type"] is None]
     assert len(benign) / len(deploys) > 0.5, "most deploys should be uneventful"
 
@@ -249,14 +249,14 @@ def test_log_lines_are_incident_flavored(stream):
 def test_dependency_failure_logs_name_the_upstream_even_under_a_retry_storm(stream):
     """The log is what resolves the ambiguity the metrics cannot.
 
-    A retry-storm dependency failure is metrically indistinguishable from a bad deploy — CPU,
-    latency and errors all up together. Its log still names the failing upstream, so M3's
+    A retry-storm dependency failure is metrically indistinguishable from a bad deploy. CPU,
+    latency and errors all up together. Its log still names the failing upstream, so a
     agent can settle from text what the hot path cannot settle from numbers. If retry-storm
     logs stopped naming the upstream, the ambiguity would become genuinely unresolvable.
     """
     dep = _of_type(stream, "dependency_failure")
     retrying = [e for e in dep if "retrying" in e["log"]]
-    assert retrying, "no retry-storm logs — the hard case is missing"
+    assert retrying, "no retry-storm logs, the hard case is missing"
     for e in dep:
         assert any(u in e["log"] for u in
                    ("payments-db", "ledger-db", "search-index", "session-store",
@@ -281,7 +281,7 @@ def test_drifted_stream_shifts_latency_distribution():
     """Drift moves the BASELINE, so it must be measured against normal ticks.
 
     Comparing against the whole clean stream would compare a shifted baseline to a mean
-    inflated by incident spikes — see test_incidents_inflate_clean_mean_above_drifted_mean.
+    inflated by incident spikes, see test_incidents_inflate_clean_mean_above_drifted_mean.
     """
     clean_normal = [e for e in generate(n_ticks=600, seed=7) if e["incident_type"] is None]
     drifted = generate(n_ticks=600, seed=7, drifted=True)
@@ -292,7 +292,7 @@ def test_incidents_inflate_clean_mean_above_drifted_mean():
     """A confound M5 has to survive, pinned here so it can't silently disappear.
 
     The clean stream's MEAN latency (incidents included) exceeds the drifted stream's, even
-    though the drifted baseline is 1.8x higher — a few big incident spikes outweigh a
+    though the drifted baseline is 1.8x higher, a few big incident spikes outweigh a
     fleet-wide shift. So a PSI monitor comparing live traffic against a training reference
     will read incidents as drift unless incident ticks are excluded from the reference or the
     window is chosen to outlast an episode. Naive PSI here fires on the wrong stream.
@@ -305,7 +305,7 @@ def test_incidents_inflate_clean_mean_above_drifted_mean():
 
 
 def test_drifted_stream_stays_mostly_within_slo():
-    """Inflated but not broken — otherwise 'drift' and 'incident' are indistinguishable
+    """Inflated but not broken, otherwise 'drift' and 'incident' are indistinguishable
     and S7's specificity claim is untestable."""
     drifted = generate(n_ticks=600, seed=7, drifted=True)
     assert sum(e["label"] for e in drifted) / len(drifted) < 0.10

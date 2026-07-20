@@ -79,3 +79,11 @@ traces/
 .vscode/
 .idea/
 *.swp
+
+# --- Personal build notes (kept locally, not published) ---
+CLAUDE.md
+docs/00-what-it-is.md
+docs/01-architecture.md
+docs/02-build-plan.md
+docs/03-setup.md
+docs/04-domain.md

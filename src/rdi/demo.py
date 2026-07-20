@@ -1,4 +1,4 @@
-"""`rdi-recover` and `rdi-parity` — M1's two artifacts, runnable rather than only asserted.
+"""Runnable demos. The tests prove these properties; these commands show them.
 
 The tests prove these properties; these commands *show* them, which is what a reader who
 doesn't run pytest actually looks at.
@@ -72,14 +72,14 @@ def parity(n_ticks: int = 600) -> int:  # 600: short enough to be quick, long en
     print("TRAIN=SERVE  offline (training) vs streamed (serving)")
     print(f"  max abs difference  {max_diff:.1e}   "
           f"{'✅ identical' if max_diff == 0 else '❌ SKEW'}")
-    print("  (they agree because they are the same code, replayed — not two implementations)")
+    print("  (they agree because they are the same code, replayed, not two implementations)")
 
     leaky = compute_offline_leaky(events)
     col = FEATURE_NAMES.index("latency_over_baseline")
     print()
     print("THE LEAK  a per-service mean over the whole series (the pandas-training version)")
     print(f"  max abs difference  {float(np.abs(leaky[:, col] - offline[:, col]).max()):.2f}"
-          "   vs the online path — inputs the model will never see in production")
+          "   vs the online path, inputs the model will never see in production")
     print()
     print(f"  {'incident':<22}{'online':>10}{'leaky':>10}   latency_over_baseline")
     ordered = sorted(events, key=lambda e: e["ts"])
@@ -90,7 +90,7 @@ def parity(n_ticks: int = 600) -> int:  # 600: short enough to be quick, long en
         print(f"  {kind:<22}{offline[idx, col].mean():>10.2f}{leaky[idx, col].mean():>10.2f}")
     print()
     print("  The leaky baseline is contaminated by the incidents it should expose, so outages")
-    print("  read MILDER than they are — the feature is least trustworthy exactly where it")
+    print("  read MILDER than they are, the feature is least trustworthy exactly where it")
     print("  matters most.")
     return 0
 
@@ -110,7 +110,7 @@ def score(n_ticks: int = 6000) -> int:
     events = generate(n_ticks=n_ticks, seed=7, incidents_per_service=10)
     X, y, ts = build_dataset(events)
     print(f"events                {len(X)} (after a {WARMUP_TICKS:.0f}-tick warmup)")
-    print("target                incident_type — NOT `label`, which is the SLO if-statement")
+    print("target                incident_type. NOT `label`, which is the SLO if-statement")
     print()
 
     Xtr, Xte, ytr, yte = temporal_split(X, y, ts)
@@ -143,15 +143,15 @@ def score(n_ticks: int = 6000) -> int:
     print("  feature importance   " + "  ".join(f"{n}={v}" for n, v in importances(model)[:4]))
     print()
     print("  The hard class is dependency_failure, and it is mistaken for bad_deploy: a retry")
-    print("  storm drives CPU, latency and errors up together — exactly a bad deploy's shape —")
+    print("  storm drives CPU, latency and errors up together, exactly a bad deploy's shape , ")
     print("  and benign deploys ship often enough that one recently landed. Opposite fixes")
     print("  (failover vs rollback). The metrics cannot settle it; the log line names the")
-    print("  upstream, which is M3's job.")
+    print("  upstream, which a log-reading step could use.")
     return 0
 
 
 def uncertainty(n_ticks: int = 6000) -> int:
-    """The unknown-unknowns detector and the conformal sets — including what did NOT work."""
+    """The unknown-unknowns detector and the conformal sets, including what did NOT work."""
     import numpy as np
 
     from rdi.anomaly import detection_rate, fit_on_normal
@@ -164,14 +164,14 @@ def uncertainty(n_ticks: int = 6000) -> int:
     clf, det = train(Xtr, ytr), fit_on_normal(Xtr, ytr)
     per, rates = evaluate(clf, Xte, yte)["per_class"], detection_rate(det, Xte, yte)
 
-    print("ANOMALY DETECTOR — trained on NORMAL ticks only, so it can flag what it never saw")
+    print("ANOMALY DETECTOR, trained on NORMAL ticks only, so it can flag what it never saw")
     print(f"  {'class':<20}{'clf recall':>12}{'det flagged':>13}")
     for c in ("normal", "memory_leak", "dependency_failure", "traffic_spike", "bad_deploy"):
         print(f"  {c:<20}{per[c]['recall']:>12.2f}{rates[c]['flagged']:>12.1%}")
     inc = [c for c in rates if c != "normal"]
     corr = float(np.corrcoef([per[c]["recall"] for c in inc],
                              [rates[c]["flagged"] for c in inc])[0, 1])
-    print(f"\n  correlation(clf recall, det flag) = {corr:+.2f} — anti-correlated, so the two")
+    print(f"\n  correlation(clf recall, det flag) = {corr:+.2f}, anti-correlated, so the two")
     print("  layers are strongest on DIFFERENT incidents. That is what earns the second model.")
 
     seen = ytr != "memory_leak"
@@ -190,9 +190,9 @@ def uncertainty(n_ticks: int = 6000) -> int:
     print(f"    detector catches only {float(flag[missed].mean()):.1%} of the classifier's misses,")
     dis_prec, base = float((yte[dis] != "normal").mean()), float((yte != "normal").mean())
     print(f"    and 'clf says normal, det disagrees' is {dis_prec:.1%} incidents"
-          f" vs a {base:.1%} base rate — no signal.")
+          f" vs a {base:.1%} base rate, no signal.")
 
-    print("\nCONFORMAL SETS — coverage guarantee, and a prediction of mine that failed")
+    print("\nCONFORMAL SETS, coverage guarantee, and a prediction of mine that failed")
     c1, c2 = np.quantile(ts, 0.55), np.quantile(ts, 0.75)
     tr, ca, te = ts < c1, (ts >= c1) & (ts < c2), ts >= c2
     m2 = train(X[tr], y[tr])
@@ -206,7 +206,7 @@ def uncertainty(n_ticks: int = 6000) -> int:
         ns = coverage(naive_sets(p_te, a, cls), y[te])
         print(f"  >={1 - a:<8.0%}{cs['coverage']:>15.3f}{cs['avg_set_size']:>7.2f}"
               f"{cs['ambiguous_rate']:>11.1%}{ns['coverage']:>11.3f}")
-    print("  naive softmax barely moves with the target — it cannot be dialled to a guarantee.")
+    print("  naive softmax barely moves with the target, it cannot be dialled to a guarantee.")
 
     dep = y[te] == "dependency_failure"
     mis = dep & (m2.predict(X[te]) == "bad_deploy")
@@ -272,14 +272,14 @@ def loadtest(n_ticks: int = 4000) -> int:
     print(f"  model.predict_proba  {c_model:.3f} ms")
     print(f"  detector.flag        {c_det1:.3f} ms   <- {c_det1 / max(c_model, 1e-9):.0f}x the "
           "classifier, and most of the budget")
-    print(f"  The same forest costs {c_det_b:.4f} ms/event at batch 256 — "
+    print(f"  The same forest costs {c_det_b:.4f} ms/event at batch 256, "
           f"{c_det1 / max(c_det_b, 1e-9):.0f}x cheaper per event. It is sklearn per-call")
     print("  dispatch, not compute (it scales with tree count: 25 trees ~0.7ms, 200 ~5.1ms).")
     print("  So it runs batched, on its own consumer group.")
 
     together = latency_profile(HotPathScorer(model, q), events,
                                detector=NearLineDetector(det))
-    print("\nAND OFF THE PATH IS NOT ENOUGH — IT HAS TO LEAVE THE THREAD")
+    print("\nAND OFF THE PATH IS NOT ENOUGH. IT HAS TO LEAVE THE THREAD")
     print(f"  hot path alone         p99 {alone['p99_ms']:.3f} ms   max {alone['max_ms']:6.2f} ms"
           f"   {alone['throughput_eps']:,.0f} eps")
     print(f"  + detector in-loop     p99 {together['p99_ms']:.3f} ms   "
@@ -287,10 +287,10 @@ def loadtest(n_ticks: int = 4000) -> int:
     print(f"  near-line flags        {together['anomalies_flagged']}")
     print("  The detector's cost is EXCLUDED from these timings, yet co-locating it still")
     print("  perturbs the tail: a 7ms batched tree walk every 256 events evicts cache under")
-    print("  the events that follow. (Not GC — disabling it does not help.) 'Don't count it'")
+    print("  the events that follow. (Not GC, disabling it does not help.) 'Don't count it'")
     print("  is not latency isolation; only a separate process is.")
     print("\n  Machine-dependent: the reference run showed p99 0.633 -> 1.525 ms and")
-    print("  max 2.89 -> 20.52 ms. Direction is robust, magnitude is not — which is why this")
+    print("  max 2.89 -> 20.52 ms. Direction is robust, magnitude is not, which is why this")
     print("  lives here and not in an assertion.")
     return 0
 

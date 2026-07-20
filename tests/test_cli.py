@@ -1,4 +1,4 @@
-"""Tests for the `rdi-stream` CLI — the M0 artifact.
+"""Tests for the `rdi-stream` CLI.
 
 The stream is meant to be piped (`rdi-stream | jq`, `| head`), so the pipe contract is part
 of the artifact, not a detail.
