@@ -82,7 +82,7 @@ Steps:
 
 ---
 
-## Milestone 2 — Scoring layer (Week 7–12) — 🚧 step 1 of 5 done
+## Milestone 2 — Scoring layer ✅ DONE (4 shipped, 1 cut on evidence)
 
 **Goal:** real-time scoring meeting a latency SLO, with calibrated uncertainty.
 
@@ -117,22 +117,55 @@ Steps:
 Steps:
 1. ✅ **Classical hot-path model** (`src/rdi/model.py`, LightGBM): 5-class `incident_type`,
    temporal split, macro-F1 **0.863**. `make score`. Sub-ms serving measured in step 5.
-2. Add the **anomaly detector** (IsolationForest / from-scratch). Reuse
-   `timeseries-anomaly-detection`. The test that earns it: hold out one incident type from
-   training, show the classifier mislabels it (it can only name what it has seen) while the
-   detector still flags it. That is what "unknown-unknowns" has to mean to be worth the code.
-3. **Ensemble + calibrate**; add **conformal prediction** (reuse `conformal-prediction`) —
-   verify empirical coverage hits the target on the stream. The payoff is now real: on the
-   `dependency_failure`/`bad_deploy` confusion the set should come back
-   `{dependency_failure, bad_deploy}` — an explicit "the metrics can't settle this", which is
-   exactly when M3 should read the log and M4 should not auto-remediate.
-4. Train the **small MLX sequence encoder** (1–20M params) on-device for richer signal; keep
-   it small enough to run inline. (See `docs/03-setup.md` for MLX.) Honest bar: it must beat
-   0.863 macro-F1 on the *temporal* split to justify its latency and memory, or it gets cut.
-5. **Load-test** the hot path: measure throughput + p50/p99; state SLOs. Budget so far —
-   features cost p99 0.30ms of a sub-ms target.
+2. ✅ **Anomaly detector** (`src/rdi/anomaly.py`, IsolationForest on normal ticks only).
+   It earns its place: hide `memory_leak` from both models, and the classifier — which
+   cannot say "I don't know" — calls it `normal` **39%** of the time while the detector still
+   flags **77%** of it. Per-class strengths are **anti-correlated (−0.66)** with the
+   classifier's: its worst class (`dependency_failure`, recall 0.50) is the detector's best
+   (98.9%), and its best (`bad_deploy`, 1.00) is the detector's worst (30.2%).
+   **Honest limit:** that complementarity is at the *class* level only. At the *event* level
+   the detector rescues just **18.8%** of the classifier's misses, and "classifier says
+   normal, detector disagrees" is **15.5% incidents against a 19.7% base rate — worse than
+   guessing**. Both fail on the same mild, pre-breach ticks. It is not a safety net.
+3. ✅ **Conformal prediction** (`src/rdi/conformal.py`, split-conformal / LAC). Coverage
+   holds: 0.919 at a 90% target, 0.962 at 95%. Naive softmax thresholding cannot be dialled
+   at all (0.960 regardless of α).
+   **The prediction in this plan was wrong.** Conformal was supposed to hedge the
+   `dependency_failure`/`bad_deploy` confusion so an ambiguous set could route to the LLM. It
+   does not: when the model misreads, it assigns **P(bad_deploy)=0.973** and
+   **P(dependency_failure)=0.017**. It is *confidently wrong, not uncertain*, and conformal
+   can only widen a set the model already hesitates on — it cannot manufacture doubt. Forcing
+   the hedge needs a 99% target, which makes **42% of the entire stream** ambiguous. So an
+   ambiguous set is not a usable escalation signal for this confusion at any operating point.
+4. ❌ **MLX sequence encoder — CUT, on the bar this plan set** ("must beat 0.863 macro-F1 or
+   it gets cut"). Tested the premise cheaply first rather than asserting it: a 5× richer
+   temporal feature space (8 → 40 features, lags 1/2/4/8 per service, a proxy for what a
+   sequence encoder would learn) moved macro-F1 only 0.863 → 0.880 **and made the target
+   class worse** — `dependency_failure` recall 0.50 → 0.41, F1 0.62 → 0.58. The bottleneck is
+   not model capacity or temporal context; the discriminating information **is not in the
+   metrics at all**. It is in the log line. Spending 8 GB of laptop and a second per-call
+   model dispatch to not fix that would be theatre.
+5. ✅ **Load test** (`make loadtest`). Hot path **p50 0.366ms, p99 0.919ms, 2,513 events/s**
+   single-threaded — **sub-ms p99 SLO met**.
+   **The detector had to come off the hot path to get there.** Measured per call: features
+   0.058ms, classifier 0.205ms, `detector.flag` **5.9ms** — 29× the classifier and 99% of the
+   budget, which blew the SLO by 7×. It is sklearn per-call dispatch, not compute: the same
+   forest costs **0.032ms/event at batch 256 (186× cheaper)** and scales with tree count. So
+   it runs batched on its own consumer group.
+   **And off the path was not enough — it had to leave the thread.** Co-locating the batched
+   detector, *with its own cost excluded from the timing*, still inflated hot-path p99
+   **0.919 → 2.166ms** and max **3.04 → 38.29ms**, because a 6ms tree walk every 256 events
+   evicts cache under the events that follow. (Not GC — disabling it does not help.)
+   "Don't count it" is not latency isolation; only a separate process is. This is the
+   architecture's own LLM thesis, holding one layer further down than it was written for.
 
-**Artifact:** load-test report (throughput + p99) + a conformal coverage plot.
+**Artifact:** ✅ `make uncertainty` + `make loadtest`. 120 tests, ruff clean.
+
+**Caveat on the latency numbers:** they are machine-dependent and are *not* asserted in the
+test suite. An earlier version asserted p99 < 2ms and failed at 2.83ms purely from contention
+with other tests; the co-location effect flipped sign under the same noise. The suite keeps
+only an order-of-magnitude regression guard, and the real numbers come from `make loadtest`
+in a clean process. A flaky test that encodes a claim is worse than no test.
 
 ---
 
@@ -219,7 +252,7 @@ broker.
 
 - [x] **M0 Foundations — AIOps domain committed + labeled synthetic stream (36 tests)**
 - [x] **M1 Ingestion — 0-loss crash recovery (1200/1200) + train=serve parity (0.0 skew)**
-- [ ] M2 Scoring — p99 SLO + conformal coverage
+- [x] **M2 Scoring — macro-F1 0.863, p99 0.919ms (sub-ms SLO met), conformal coverage holds**
 - [ ] M3 Reasoning — grounded explanation + remediation, hot path unaffected
 - [ ] M4 Decision — validated causal lift, peeking-safe
 - [ ] M5 Ops — drift specificity + canary/rollback

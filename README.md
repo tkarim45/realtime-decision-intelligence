@@ -6,11 +6,15 @@
 > modeling — all under drift monitoring. Runs on an Apple M1 (8 GB): small on-device
 > models for scoring, local + cloud LLM routed for reasoning.
 
-**Status:** 🚧 **M0–M1 of 6 complete, M2 started (1/5 steps).** Domain committed (**AIOps**);
-labeled synthetic telemetry stream; durable at-least-once broker with **crash recovery proven
-(1200/1200, 0 lost)**; train=serve online features at **0.0 skew**, hot path **p99 0.30ms**;
-hot-path incident classifier at **macro-F1 0.863** (temporal split). 94 tests, ruff clean.
-Anomaly detection, conformal, MLX encoder and the load test are pending. Build from
+**Status:** 🚧 **M0–M2 of 6 complete.** Domain committed (**AIOps**); labeled synthetic
+telemetry stream; durable at-least-once broker with **crash recovery proven (1200/1200, 0
+lost)**; train=serve online features at **0.0 skew**; incident classifier at **macro-F1
+0.863**; unsupervised detector that catches an incident class the classifier was never
+trained on; conformal sets whose **coverage guarantee holds**; hot path at **p99 0.919ms,
+2,513 events/s — sub-ms SLO met**. 120 tests, ruff clean.
+
+**Still to build: M3 reasoning (LLM agent), M4 causal uplift, M5 drift/canary, M6 dashboard.**
+Those are the reason this is a 6–12-month capstone, and they are not started. Build from
 [`docs/02-build-plan.md`](docs/02-build-plan.md).
 
 **Capstone #3 of 3.** Siblings: `self-improving-agent-platform`,
@@ -131,12 +135,15 @@ realtime-decision-intelligence/
 │   ├── broker.py       # ✅ M1 — durable event log (consumer groups, at-least-once)
 │   ├── consumer.py     # ✅ M1 — claim → features → ack
 │   ├── features.py     # ✅ M1 — online windowed features, train=serve
-│   ├── demo.py         # ✅ M1 — `rdi-demo recover|parity`
-│   ├── scoring/        # M2 — classical + MLX encoder + anomaly + conformal
+│   ├── model.py        # ✅ M2 — LightGBM incident classifier + honest splits
+│   ├── anomaly.py      # ✅ M2 — IsolationForest on normal ticks only
+│   ├── conformal.py    # ✅ M2 — split-conformal prediction sets
+│   ├── scoring.py      # ✅ M2 — the assembled hot path + near-line detector
+│   ├── demo.py         # ✅ runnable artifacts for every milestone
 │   ├── reasoning/      # M3 — LLM agent: explain + remediate (routed)
 │   ├── decision/       # M4 — uplift + policy + experimentation
 │   └── ops/            # M5 — drift, retrain, canary/shadow, rollback
-├── tests/              # ✅ 75 passing
+├── tests/              # ✅ 120 passing
 ├── dashboard/          # M6 — Next.js real-time UI
 └── data/               # gitignored
 ```
@@ -157,6 +164,10 @@ make drift                       # M5 fixture: shifted baseline, zero incidents
 
 make recover                     # M1 — kill a consumer mid-stream, lose nothing
 make parity                      # M1 — train=serve, and the leak it prevents
+
+make score                       # M2 — incident classifier, temporal vs leaky split
+make uncertainty                 # M2 — unknown-unknowns detector + conformal sets
+make loadtest                    # M2 — hot-path latency, and what came off it
 
 rdi-stream --n 600 | jq -c 'select(.label == 1)'
 ```
@@ -235,6 +246,77 @@ make it bimodal — its mean of ~0.9 describes no actual tick); `rps` was doing 
 plain time cut left `bad_deploy` with **zero test examples** while `evaluate` quietly averaged
 over the survivors — both now raise instead of reporting a 4-class number as macro-F1.
 
+### Uncertainty: one layer earned its place, one prediction failed (`make uncertainty`)
+
+**The anomaly detector earns its place.** It trains on **normal ticks only**, so it can flag
+what it has never seen. Hide `memory_leak` from both models: the classifier — which cannot say
+"I don't know" — calls it `normal` **39%** of the time, while the detector still flags **77%**
+of it. Their per-class strengths are **anti-correlated (−0.66)**:
+
+| class | classifier recall | detector flagged |
+|---|---:|---:|
+| `normal` | 0.99 | 2.6% |
+| `memory_leak` | 0.84 | 76.5% |
+| `dependency_failure` | **0.50** | **98.9%** |
+| `traffic_spike` | 0.89 | 100.0% |
+| `bad_deploy` | **1.00** | **30.2%** |
+
+The classifier's worst class is the detector's best and vice versa — that, not intuition, is
+what justifies a second model.
+
+**But it is not a safety net, and the difference matters.** Class-level complementarity does
+not imply event-level complementarity. The detector rescues only **18.8%** of the classifier's
+misses, and "classifier says normal, detector disagrees" is **15.5% incidents against a 19.7%
+base rate — worse than guessing**. Both fail on the same mild, pre-breach ticks.
+
+**Conformal delivers its guarantee** (0.919 at a 90% target, 0.962 at 95%), while naive
+softmax thresholding cannot be dialled at all (0.960 regardless of α).
+
+**And the prediction in the build plan was wrong.** Conformal was supposed to hedge the
+`dependency_failure`/`bad_deploy` confusion so an ambiguous set could route to the LLM. It
+does not — when the model misreads, it assigns **P(bad_deploy)=0.973** and
+**P(dependency_failure)=0.017**. It is *confidently wrong, not uncertain*, and conformal can
+only widen a set the model already hesitates on; it cannot manufacture doubt. Forcing the
+hedge needs a 99% target, which makes **42% of the whole stream** ambiguous. Uncertainty
+quantification is not a substitute for information the metrics never contained.
+
+### The hot path, and what had to come off it (`make loadtest`)
+
+```
+HOT PATH  features -> classifier -> conformal set -> act/escalate
+  p50 / p95 / p99     0.366 / 0.572 / 0.919 ms
+  throughput          2,513 events/s single-threaded
+  sub-ms p99 SLO      MET
+```
+
+**The anomaly detector had to leave the hot path to get there.** Measured per call: features
+0.058ms, classifier 0.205ms, `detector.flag` **5.9ms** — 29× the classifier and 99% of the
+budget, blowing the SLO by 7×. It is sklearn per-call dispatch, not compute: the same forest
+costs **0.032ms/event at batch 256 (186× cheaper)**. So it runs batched on its own consumer
+group — and still catches the unknown-unknowns it exists for, one batch later.
+
+**And off the path was not enough — it had to leave the thread.** Co-locating the batched
+detector, *with its own cost excluded from the timing*, still inflated p99 **0.919 → 2.166ms**
+and max **3.04 → 38.29ms**, because a 6ms tree walk every 256 events evicts cache under the
+events that follow. (Not GC — disabling it doesn't help.) **"Don't count it" is not latency
+isolation; only a separate process is.** The architecture always said that about the LLM;
+measurement said it one layer further down.
+
+### The MLX encoder was cut, on evidence
+
+The build plan set the bar: *beat 0.863 macro-F1 or be cut*. Rather than assert it was
+unnecessary, I tested the premise — a 5× richer temporal feature space (8 → 40 features, lags
+1/2/4/8 per service, a cheap proxy for what a sequence encoder learns) moved macro-F1 only
+0.863 → 0.880 **and made the target class worse**: `dependency_failure` recall 0.50 → 0.41.
+The bottleneck is not model capacity or temporal context. The discriminating information is
+not in the metrics at all — it is in the log line, which is M3's job.
+
+> **On the latency numbers:** they are machine-dependent and deliberately *not* asserted in
+> the test suite. An earlier version asserted p99 < 2ms and failed at 2.83ms purely from
+> contention with other tests; the co-location effect flipped sign under the same noise. The
+> suite keeps an order-of-magnitude regression guard; the real numbers come from
+> `make loadtest` in a clean process. A flaky test that encodes a claim is worse than no test.
+
 **A bug worth stating: a rolling *mean* baseline eats its own incident.** Over a sustained
 outage the baseline climbs to meet the outage and `latency_over_baseline` decays toward 1.0 —
 a 3.0× outage measured **1.13× by its end, 89% of the signal gone**. Incidents run 40–300
@@ -267,11 +349,16 @@ incident_type          count      of which breaching (label=1)
 
 ## Tech stack
 
-Python 3.12 · file-backed streams broker · asyncio workers · MLX (small encoder) ·
-scikit-learn / LightGBM · from-scratch conformal + PSI · uplift/meta-learners ·
-local Qwen2.5-1.5B (llama.cpp) + Claude API · RAG + MCP · FastAPI + WebSockets · Redis ·
-SQLite/Postgres · Next.js · Prometheus/Grafana · MLflow/DVC · Docker.
+**Built (M0–M2), and it is a short list on purpose:** Python 3.12 · NumPy · scikit-learn ·
+LightGBM · a from-scratch file-backed streams broker (Redis-Streams contract) · from-scratch
+online windowed features · split-conformal from scratch · pytest · ruff. The core installs
+with three dependencies and runs offline on an M1.
+
+**Planned (M3–M6), not in the repo yet:** local Qwen2.5-1.5B (llama.cpp) + Claude API routed ·
+RAG + MCP · uplift/meta-learners · from-scratch PSI · FastAPI + WebSockets · Next.js ·
+Prometheus/Grafana · Docker. Each arrives with the milestone that needs it — see
+[`docs/03-setup.md`](docs/03-setup.md) for the per-milestone dependency table.
 
 ## License
 
-Private. All rights reserved.
+MIT — see [`LICENSE`](LICENSE). Matches `pyproject.toml` and the sibling repos.

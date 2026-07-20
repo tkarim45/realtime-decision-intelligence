@@ -1,4 +1,4 @@
-.PHONY: install test lint stream summary drift recover parity score
+.PHONY: install test lint stream summary drift recover parity score uncertainty loadtest
 
 install:
 	pip install -e ".[dev]"
@@ -30,3 +30,11 @@ parity:
 # M2: hot-path incident classifier, temporal vs random split.
 score:
 	rdi-demo score
+
+# M2: unknown-unknowns detector + conformal sets (and the prediction that failed).
+uncertainty:
+	rdi-demo uncertainty
+
+# M2: hot-path latency, and why the detector is not on it.
+loadtest:
+	rdi-demo loadtest
