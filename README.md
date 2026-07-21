@@ -1,11 +1,13 @@
 # realtime-decision-intelligence
 
-Real-time incident detection for service telemetry, built to run on a laptop.
+Detects incidents in service telemetry, works out which ones are worth acting on, and picks
+the remediation. Runs on a laptop.
 
 Six services emit metrics once a second. The pipeline ingests them through a durable log,
-computes windowed features, classifies what kind of incident is happening, and attaches a
-prediction set with a coverage guarantee. The hot path holds a p99 of 0.919ms at roughly
-2,500 events per second on a single core.
+computes windowed features, classifies the incident, attaches a prediction set with a coverage
+guarantee, reads the log line when the metrics are ambiguous, and decides an action by
+estimating what that action is actually worth. The hot path holds a p99 of 0.919ms at roughly
+2,500 events per second on one core.
 
 It's a benchmark and a reference implementation, not a production service. The telemetry is
 synthetic, generated with labelled incidents so every claim below can be measured against
@@ -30,6 +32,8 @@ make parity        # offline and online features are byte-identical
 make score         # train the classifier, temporal vs shuffled split
 make uncertainty   # anomaly detection and conformal prediction sets
 make loadtest      # hot-path latency breakdown
+make decide        # the intervention policy against its baselines
+make pipeline      # every layer end to end on one stream
 ```
 
 Pipe the stream anywhere:
@@ -59,16 +63,34 @@ it can flag failure modes that were never labelled.
 **Conformal prediction** (`conformal.py`), split-conformal sets carrying a distribution-free,
 finite-sample coverage guarantee. Ambiguous sets route events away from automatic action.
 
+**Log reading** (`reasoning.py`) for the events the metrics can't separate. A retry storm and a
+bad release look identical on every metric, and the classifier is confidently wrong rather than
+uncertain, so no amount of calibration helps. The log line names the failing upstream. Ships a
+deterministic offline reader and a real-model reader behind the same interface.
+
+**Intervention policy** (`decision.py`). Knowing what broke isn't knowing what to do. Every
+remediation costs something and the wrong one has negative effect, so a T-learner estimates the
+incremental effect of each action per event and the policy acts only when that clears the cost.
+
+**Drift and rollout** (`ops.py`), PSI against a healthy-only reference, plus shadow scoring,
+canary releases and one-step rollback.
+
+**The assembled loop** (`pipeline.py`), all of the above running as one system.
+
 ## How it works
 
 ```
-telemetry ─▶ durable log ─▶ online features ─▶ classifier ─▶ conformal set ─▶ act / escalate
-                  │                                  │
-                  │                                  └─▶ near-line anomaly detector (batched)
-                  └─▶ consumer groups, at-least-once delivery
+telemetry ─▶ durable log ─▶ features ─▶ classifier ─▶ conformal set ─▶ act / escalate
+                  │                          │              │
+                  │                          │              └─▶ read the log line
+                  │                          │                    (ambiguous events only)
+                  │                          ├─▶ anomaly detector (batched, off-thread)
+                  │                          └─▶ uplift ─▶ action, or none
+                  └─▶ at-least-once delivery      │
+                                                  └─▶ drift monitor ─▶ retrain signal
 ```
 
-The anomaly detector deliberately sits off the request path. More on why below.
+The anomaly detector and the log reader both sit off the request path. More on why below.
 
 ## Results
 
@@ -95,6 +117,31 @@ Per-class results, and how the two detection layers compare:
 
 Their strengths run opposite to each other (correlation -0.66). The classifier's worst class
 is the detector's best, and vice versa, which is the reason both are here.
+
+Reading the log line for the 5% of events the metrics can't separate:
+
+| | macro-F1 | dependency_failure recall |
+|---|---:|---:|
+| classifier alone | 0.863 | 0.50 |
+| plus log reading | 0.968 | 0.96 |
+
+Choosing an action, scored as breaches avoided net of what the actions cost:
+
+| Policy | Value | Events treated |
+|---|---:|---:|
+| causal, T-learner, cost-aware | **245.1** | 845 |
+| risk threshold, top 10%, runbook action | 206.3 | 1,070 |
+| causal, per-class table | 108.6 | 564 |
+| treat every alert, runbook action | 105.7 | 1,974 |
+| treat nobody | 0.0 | 0 |
+| risk threshold, top 25%, runbook action | **-104.9** | 2,673 |
+
+Drift detection, on windows of 600 events:
+
+| Stream | Windows alerting |
+|---|---:|
+| clean, contains real incidents | 8% |
+| shifted baseline, no incidents | 100% |
 
 ## Design notes
 
@@ -125,6 +172,25 @@ near-identical ticks, so a random split scores the model on ticks whose neighbou
 memorised. That's worth +0.121 macro-F1 of nothing. It was only +0.020 on an earlier, easier
 version of the generator, which is its own lesson: a leak only shows up where there's headroom
 for it to show up.
+
+**A risk threshold works right up until it doesn't.** Ranking by risk and applying the runbook
+action is a strong baseline, and at the top 10% it scores 206.3. Move the cutoff to the top 25%
+and the same rule scores -104.9, because it starts acting on events that were never going to
+breach and the costs outrun the benefit. The causal policy scores higher than either while
+treating 21% fewer events, since it picks its own operating point instead of being handed one.
+
+**Averaging effects over a class is too coarse to act on.** The first version of the policy
+estimated one uplift number per incident type. Most events in a class don't breach, so the
+average understated the gain where action mattered, and a cost-aware rule then declined to act
+at all: memory-leak restarts came out at 0.134 against a cost of 0.30, so it never restarted
+anything. Conditioning on features instead moved the policy from 108.6 to 245.1.
+
+**Naive PSI reads incidents as drift.** A handful of large incident spikes move mean latency
+further than a fleet-wide 1.8x baseline shift does, so a monitor comparing live traffic against
+a training reference fires on outages, which is exactly backwards: an outage wants remediation,
+drift wants retraining. Measured, the naive version alerted on 13 clean windows and 14 drifted
+ones, which is no discrimination at all. Building the reference from healthy ticks only and
+requiring the median to move as well gets it to 8% against 100%.
 
 **More temporal context didn't help.** Widening the feature space five times over (8 to 40
 features, lags at 1, 2, 4 and 8 ticks) moved macro-F1 from 0.863 to 0.880 and made the hardest

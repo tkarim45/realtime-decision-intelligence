@@ -1,4 +1,4 @@
-.PHONY: install test lint stream summary drift recover parity score uncertainty loadtest
+.PHONY: install test lint stream summary drift recover parity score uncertainty loadtest pipeline decide
 
 install:
 	pip install -e ".[dev]"
@@ -9,32 +9,40 @@ test:
 lint:
 	ruff check src tests
 
-# M0 artifact: labeled synthetic AIOps stream as JSONL on stdout.
+# Labelled synthetic telemetry as JSONL on stdout.
 stream:
 	rdi-stream --n 600
 
 summary:
 	rdi-stream --n 600 --summary
 
-# The M5 specificity fixture: distribution shift, zero incidents injected.
+# Distribution shift with zero incidents, for testing the drift monitor.
 drift:
 	rdi-stream --n 600 --drifted --summary
 
-# M1 artifacts: S1 (kill a consumer, lose nothing) and train=serve parity.
+# Kill a consumer mid-stream and lose nothing; offline features match online.
 recover:
 	rdi-demo recover
 
 parity:
 	rdi-demo parity
 
-# M2: hot-path incident classifier, temporal vs random split.
+# Incident classifier, temporal vs shuffled split.
 score:
 	rdi-demo score
 
-# M2: unknown-unknowns detector + conformal sets (and the prediction that failed).
+# Unsupervised detector and conformal prediction sets.
 uncertainty:
 	rdi-demo uncertainty
 
-# M2: hot-path latency, and why the detector is not on it.
+# Hot-path latency, and why the detector is not on it.
 loadtest:
 	rdi-demo loadtest
+
+# Every layer end to end on one stream.
+pipeline:
+	rdi-demo pipeline
+
+# The intervention policy against the baselines it has to beat.
+decide:
+	rdi-demo decide

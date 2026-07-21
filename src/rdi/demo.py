@@ -143,7 +143,7 @@ def score(n_ticks: int = 6000) -> int:
     print("  feature importance   " + "  ".join(f"{n}={v}" for n, v in importances(model)[:4]))
     print()
     print("  The hard class is dependency_failure, and it is mistaken for bad_deploy: a retry")
-    print("  storm drives CPU, latency and errors up together, exactly a bad deploy's shape , ")
+    print("  storm drives CPU, latency and errors up together, exactly a bad deploy's shape,")
     print("  and benign deploys ship often enough that one recently landed. Opposite fixes")
     print("  (failover vs rollback). The metrics cannot settle it; the log line names the")
     print("  upstream, which a log-reading step could use.")
@@ -295,13 +295,60 @@ def loadtest(n_ticks: int = 4000) -> int:
     return 0
 
 
+def pipeline(n_ticks: int = 3000) -> int:
+    """Run every layer end to end on one stream."""
+    from rdi.pipeline import demo as run_demo
+    from rdi.pipeline import render
+    print(render(run_demo(n_ticks=n_ticks)))
+    return 0
+
+
+def decide(n_ticks: int = 6000) -> int:
+    """Compare the causal policy against the baselines it has to beat."""
+    import numpy as np
+
+    from rdi.decision import TLearner, evaluate_policies, simulate_experiment, uplift
+    from rdi.model import build_dataset, temporal_split, train
+
+    events = sorted(generate(n_ticks=n_ticks, seed=7, incidents_per_service=10),
+                    key=lambda e: e["ts"])
+    X, y, ts = build_dataset(events)
+    Xtr, Xte, ytr, _ = temporal_split(X, y, ts)
+    clf = train(Xtr, ytr)
+    cut = np.quantile(ts, 0.7)
+    warm = [e for e in events if e["ts"] >= 60.0]
+    tr = [e for e, k in zip(warm, ts < cut, strict=True) if k]
+    te = [e for e, k in zip(warm, ts >= cut, strict=True) if k]
+    pred = list(clf.predict(Xte))
+    risk = 1.0 - clf.predict_proba(Xte)[:, list(clf.classes_).index("normal")]
+
+    exp = simulate_experiment(tr, seed=1)
+    table = uplift(exp)
+    effects = TLearner().fit(Xtr, exp["action"], exp["outcome"]).effects(Xte)
+
+    print("Every action costs something, so acting is only worth it when the estimated")
+    print("incremental effect clears that cost. Scored against the baselines:")
+    print()
+    print(f"  {'policy':<38}{'value':>9}{'treated':>10}")
+    for p in evaluate_policies(te, pred, table, risk, effects):
+        print(f"  {p.name:<38}{p.value:>9.1f}{p.treated:>10,}")
+    print()
+    print("  The risk threshold is a strong baseline: it uses the runbook remediation for")
+    print("  whatever class was predicted. Move its cutoff from the top 10% to the top 25%")
+    print("  and the same rule destroys value, because it starts acting on events that were")
+    print("  never going to breach. The causal policy picks its own operating point.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="rdi-demo")
-    ap.add_argument("demo", choices=["recover", "parity", "score", "uncertainty", "loadtest"])
+    ap.add_argument("demo", choices=["recover", "parity", "score", "uncertainty", "loadtest",
+                                     "pipeline", "decide"])
     ap.add_argument("--n", type=int, default=None)
     args = ap.parse_args(argv)
     fn = {"recover": recover, "parity": parity, "score": score,
-          "uncertainty": uncertainty, "loadtest": loadtest}[args.demo]
+          "uncertainty": uncertainty, "loadtest": loadtest,
+          "pipeline": pipeline, "decide": decide}[args.demo]
     return fn(**({"n_ticks": args.n} if args.n else {}))
 
 
