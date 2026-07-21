@@ -1,4 +1,4 @@
-.PHONY: install test lint stream summary drift recover parity score uncertainty loadtest pipeline decide
+.PHONY: install test lint stream summary drift recover parity score uncertainty loadtest pipeline decide dashboard-data dashboard
 
 install:
 	pip install -e ".[dev]"
@@ -46,3 +46,11 @@ pipeline:
 # The intervention policy against the baselines it has to beat.
 decide:
 	rdi-demo decide
+
+# Export a real pipeline run for the dashboard to render.
+dashboard-data:
+	rdi-export
+
+# Run the dashboard locally (needs `make dashboard-data` first).
+dashboard:
+	cd frontend && npm run dev

@@ -87,3 +87,12 @@ docs/01-architecture.md
 docs/02-build-plan.md
 docs/03-setup.md
 docs/04-domain.md
+
+# --- Frontend ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+frontend/.turbo/
+
+frontend/AGENTS.md

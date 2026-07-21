@@ -36,6 +36,17 @@ make decide        # the intervention policy against its baselines
 make pipeline      # every layer end to end on one stream
 ```
 
+There's a dashboard too:
+
+```bash
+make dashboard-data   # export a real pipeline run to frontend/public/snapshot.json
+make dashboard        # Next.js dev server on :3000
+```
+
+It has no backend. The exporter writes a snapshot from an actual run and the page renders
+that, so it builds static. The feed replays the recorded events at a readable pace; the
+pacing is the only synthetic part. See [frontend/README.md](frontend/README.md).
+
 Pipe the stream anywhere:
 
 ```bash
@@ -75,7 +86,8 @@ incremental effect of each action per event and the policy acts only when that c
 **Drift and rollout** (`ops.py`), PSI against a healthy-only reference, plus shadow scoring,
 canary releases and one-step rollback.
 
-**The assembled loop** (`pipeline.py`), all of the above running as one system.
+**The assembled loop** (`pipeline.py`), all of the above running as one system, plus a
+Next.js dashboard in [`frontend/`](frontend) that replays a recorded run.
 
 ## How it works
 
