@@ -13,6 +13,13 @@ It's a benchmark and a reference implementation, not a production service. The t
 synthetic, generated with labelled incidents so every claim below can be measured against
 ground truth.
 
+
+## Architecture
+
+![architecture](docs/assets/architecture.png)
+
+*Interactive/exportable version: [`docs/assets/architecture.html`](docs/assets/architecture.html).*
+
 ## Install
 
 Needs Python 3.12. Three runtime dependencies: NumPy, scikit-learn, LightGBM.
